@@ -1,6 +1,9 @@
 /target
 Cargo.lock
 
+# git worktree の置き場所
+/.worktrees/
+
 # Node (ui-chrome)
 node_modules/
 dist/
