@@ -56,7 +56,11 @@ fn main() -> wry::Result<()> {
         .expect("failed to create tao window");
 
     let mut content = WryEngine::new(&window, &initial_url)?;
-    content.set_bounds(bounds(&window, 0.0, window.inner_size().height as f64))?;
+    content.set_bounds(bounds(
+        &window,
+        CHROME_HEIGHT,
+        window.inner_size().height as f64 - CHROME_HEIGHT,
+    ))?;
 
     let (commands_tx, commands_rx) = mpsc::channel::<String>();
     let chrome = WebViewBuilder::new()
@@ -89,8 +93,11 @@ fn main() -> wry::Result<()> {
             }
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::Resized(_) => {
-                    let _ =
-                        content.set_bounds(bounds(&window, 0.0, window.inner_size().height as f64));
+                    let _ = content.set_bounds(bounds(
+                        &window,
+                        CHROME_HEIGHT,
+                        window.inner_size().height as f64 - CHROME_HEIGHT,
+                    ));
                     let _ = chrome.set_bounds(bounds(&window, 0.0, CHROME_HEIGHT));
                 }
                 WindowEvent::ModifiersChanged(state) => modifiers = state,
