@@ -48,14 +48,17 @@ cargo run -p browser-app -- https://example.com
 
 | ショートカット | 動作 |
 |---|---|
-| `Cmd+L` | コマンドパレットを開く(URL入力) |
-| `Cmd+T` | 新規タブを作成 |
-| `Cmd+R` | 現在のタブをリロード |
-| `Cmd+Option+I` | 開発者ツール(Web Inspector)を開く |
+| `Cmd+L` (macOS) / `Ctrl+L` (Windows/Linux) | コマンドパレットを開く(URL入力) |
+| `Cmd+T` (macOS) / `Ctrl+T` (Windows/Linux) | 新規タブを作成 |
+| `Cmd+W` (macOS) / `Ctrl+W` (Windows/Linux) | 現在のタブを閉じる |
+| `Cmd+R` (macOS) / `Ctrl+R` (Windows/Linux) | 現在のタブをリロード |
+| `Cmd+Option+I` (macOS) / `Ctrl+Alt+I` (Windows/Linux) | 開発者ツール(Web Inspector)を開く |
+| `Cmd+クリック` (macOS) / `Ctrl+クリック` (Windows/Linux) | リンクを新規タブで開く |
 
 ### 開発者ツール
 
-コンテンツ・クローム両方のWebViewで開発者ツールが有効になっている。`Cmd+Option+I`または
+コンテンツ・クローム両方のWebViewで開発者ツールが有効になっている。macOSでは
+`Cmd+Option+I`、Windows/Linuxでは`Ctrl+Alt+I`、または
 右クリックの「要素を検証」から開ける。
 
 ## テスト・Lint

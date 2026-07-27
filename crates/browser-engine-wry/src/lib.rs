@@ -6,27 +6,71 @@ use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder, http::Request};
 
 const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
 (() => {
-  if (window.__rabKeyboardShortcutsInstalled) return;
-  window.__rabKeyboardShortcutsInstalled = true;
+  if (window.__rabContentIntegrationInstalled) return;
+  window.__rabContentIntegrationInstalled = true;
+
+  const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+  const hasPrimaryModifier = (event) => isMac ? event.metaKey : event.ctrlKey;
+  const hasSecondaryPrimaryModifier = (event) =>
+    isMac ? event.ctrlKey : event.metaKey;
+  const postMessage = (message) => {
+    window.ipc.postMessage(JSON.stringify(message));
+  };
 
   document.addEventListener("keydown", (event) => {
-    if (!event.metaKey || event.repeat) return;
+    if (!hasPrimaryModifier(event) || event.repeat) return;
 
     const key = event.key.toLowerCase();
-    const commandOnly = !event.altKey && !event.ctrlKey && !event.shiftKey;
+    const primaryOnly =
+      !event.altKey && !hasSecondaryPrimaryModifier(event) && !event.shiftKey;
     let type = null;
-    if (commandOnly && key === "t") type = "new_tab";
-    else if (commandOnly && key === "l") type = "open_location";
-    else if (commandOnly && key === "r") type = "reload";
-    else if (event.altKey && !event.ctrlKey && !event.shiftKey && key === "i") {
+    if (primaryOnly && key === "t") type = "new_tab";
+    else if (primaryOnly && key === "l") type = "open_location";
+    else if (primaryOnly && key === "r") type = "reload";
+    else if (primaryOnly && key === "w") type = "close_current_tab";
+    else if (
+      event.altKey &&
+      !hasSecondaryPrimaryModifier(event) &&
+      !event.shiftKey &&
+      key === "i"
+    ) {
       type = "open_devtools";
     }
     if (!type) return;
 
     event.preventDefault();
     event.stopPropagation();
-    window.ipc.postMessage(JSON.stringify({ type }));
+    postMessage({ type });
   }, true);
+
+  document.addEventListener("click", (event) => {
+    if (!hasPrimaryModifier(event)) return;
+
+    const target =
+      event.target instanceof Element ? event.target : event.target?.parentElement;
+    const link = target?.closest("a[href]");
+    if (!link) return;
+
+    event.preventDefault();
+    postMessage({ type: "new_tab", url: link.href });
+  }, true);
+
+  let lastUrl = location.href;
+  const notifyUrlChanged = () => {
+    if (location.href === lastUrl) return;
+    lastUrl = location.href;
+    postMessage({ type: "content_url_changed", url: location.href });
+  };
+
+  for (const method of ["pushState", "replaceState"]) {
+    const original = history[method];
+    history[method] = function (...args) {
+      const result = original.apply(this, args);
+      notifyUrlChanged();
+      return result;
+    };
+  }
+  window.addEventListener("popstate", notifyUrlChanged);
 })();
 "#;
 
