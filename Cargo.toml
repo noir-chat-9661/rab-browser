@@ -4,6 +4,7 @@ members = [
     "crates/browser-core",
     "crates/browser-engine-wry",
     "crates/browser-app",
+    "crates/browser-mcp-server",
     "spikes/webview-compose",
     "spikes/mcp-ping",
 ]

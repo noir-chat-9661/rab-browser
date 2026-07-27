@@ -1,11 +1,15 @@
 use std::{
     collections::BTreeMap,
     env, fs,
-    sync::mpsc::{self, Sender},
+    sync::{
+        Arc, Mutex,
+        mpsc::{self, Sender},
+    },
 };
 
 use browser_core::{BrowserEngine, TabId, TabManager};
 use browser_engine_wry::WryEngine;
+use browser_mcp_server::{DispatchError, McpRequest, RequestDispatcher, TabInfo};
 #[cfg(target_os = "macos")]
 use objc2::{rc::Retained, runtime::AnyObject};
 #[cfg(target_os = "macos")]
@@ -14,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tao::{
     dpi::{LogicalPosition, LogicalSize},
     event::{ElementState, Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
+    event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
     keyboard::{KeyCode, ModifiersState},
     window::{Window, WindowBuilder},
 };
@@ -30,6 +34,16 @@ const NEW_TAB_URL: &str = concat!(
     "background%3A%23171816%3Bcolor%3A%23a2a59d%3Bfont%3A14px%20system-ui%2Csans-serif%7D%3C/style%3E",
     "%3C/head%3E%3Cbody%3E%E6%96%B0%E3%81%97%E3%81%84%E3%82%BF%E3%83%96%3C/body%3E%3C/html%3E"
 );
+
+struct ProxyDispatcher(EventLoopProxy<McpRequest>);
+
+impl RequestDispatcher for ProxyDispatcher {
+    fn dispatch(&self, request: McpRequest) -> Result<(), DispatchError> {
+        self.0
+            .send_event(request)
+            .map_err(|_| DispatchError::LoopClosed)
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -243,7 +257,7 @@ fn primary_modifier_pressed(modifiers: ModifiersState) -> bool {
 #[cfg(target_os = "macos")]
 fn install_close_tab_shortcut_monitor(
     commands_tx: Sender<String>,
-    event_loop_proxy: tao::event_loop::EventLoopProxy<()>,
+    event_loop_proxy: EventLoopProxy<McpRequest>,
 ) -> Option<Retained<AnyObject>> {
     use std::{ptr::NonNull, ptr::null_mut};
 
@@ -270,7 +284,7 @@ fn install_close_tab_shortcut_monitor(
             {
                 // The original key event is consumed below, so explicitly wake
                 // tao's waiting run loop to drain the command channel.
-                let _ = event_loop_proxy.send_event(());
+                let _ = event_loop_proxy.send_event(McpRequest::Wake);
             }
             null_mut()
         } else {
@@ -446,9 +460,224 @@ fn focus_location(chrome: &WebView) {
     let _ = chrome.evaluate_script("window.rabChrome?.openLocation();");
 }
 
+fn mcp_env_enabled() -> bool {
+    env::var("RAB_MCP").is_ok_and(|value| {
+        !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "false" | "no" | "off"
+        )
+    })
+}
+
+fn parse_startup_args(args: impl IntoIterator<Item = String>) -> (bool, String) {
+    let mut mcp_enabled = mcp_env_enabled();
+    let mut initial_url = None;
+    for argument in args {
+        if argument == "--mcp" {
+            mcp_enabled = true;
+        } else if initial_url.is_none() {
+            initial_url = Some(argument);
+        }
+    }
+    (
+        mcp_enabled,
+        initial_url.unwrap_or_else(|| DEFAULT_URL.to_owned()),
+    )
+}
+
+fn eval_result(raw: String) -> Result<String, String> {
+    let value = serde_json::from_str::<serde_json::Value>(&raw)
+        .unwrap_or_else(|_| serde_json::Value::String(raw.clone()));
+    let result = match value {
+        serde_json::Value::String(value) => value,
+        other => other.to_string(),
+    };
+    if let Some(message) = result.strip_prefix("ERR:") {
+        Err(message.to_owned())
+    } else {
+        Ok(result)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_mcp_request(
+    request: McpRequest,
+    window: &Window,
+    chrome: &WebView,
+    tabs: &mut TabManager,
+    views: &mut BTreeMap<TabId, WryEngine>,
+    histories: &mut BTreeMap<TabId, TabHistory>,
+    content_events_tx: &Sender<ContentEvent>,
+    commands_tx: &Sender<String>,
+) {
+    match request {
+        McpRequest::Wake => {}
+        McpRequest::ListTabs { reply } => {
+            let current = tabs.current_id();
+            let tab_info = tabs
+                .tabs()
+                .map(|tab| TabInfo {
+                    id: tab.id.get(),
+                    url: tab.url.clone(),
+                    title: tab.title.clone(),
+                    active: current == Some(tab.id),
+                })
+                .collect();
+            let _ = reply.send(tab_info);
+        }
+        McpRequest::NewTab { url, reply } => {
+            match add_tab(
+                window,
+                tabs,
+                views,
+                histories,
+                content_events_tx,
+                commands_tx,
+                url.as_deref().unwrap_or(NEW_TAB_URL),
+            ) {
+                Ok(id) => {
+                    bring_chrome_to_front(chrome);
+                    send_state(chrome, tabs);
+                    let _ = reply.send(id.get());
+                }
+                Err(error) => {
+                    eprintln!("failed to create MCP-requested tab: {error}");
+                    let _ = reply.send(0);
+                }
+            }
+        }
+        McpRequest::CloseTab { id, reply } => {
+            let Some(id) = resolve_tab_id(tabs, id) else {
+                let _ = reply.send(false);
+                return;
+            };
+            let created_replacement = close_tab(
+                window,
+                tabs,
+                views,
+                histories,
+                content_events_tx,
+                commands_tx,
+                id,
+            );
+            if created_replacement {
+                bring_chrome_to_front(chrome);
+            }
+            send_state(chrome, tabs);
+            let _ = reply.send(true);
+        }
+        McpRequest::SelectTab { id, reply } => {
+            let selected = resolve_tab_id(tabs, id).is_some_and(|id| {
+                select_content_view(tabs, views, id);
+                true
+            });
+            if selected {
+                send_state(chrome, tabs);
+            }
+            let _ = reply.send(selected);
+        }
+        McpRequest::Navigate { url, reply } => {
+            let Some(id) = tabs.current_id() else {
+                let _ = reply.send(Err("no active tab".to_owned()));
+                return;
+            };
+            let url = normalize_url(&url);
+            let result = views
+                .get_mut(&id)
+                .ok_or_else(|| "active tab has no content view".to_owned())
+                .and_then(|view| view.navigate(&url).map_err(|error| error.to_string()));
+            if result.is_ok() {
+                if let Some(tab) = tabs.tab_mut(id) {
+                    tab.url = url;
+                }
+                send_state(chrome, tabs);
+            }
+            let _ = reply.send(result);
+        }
+        McpRequest::GoBack { reply } => {
+            let moved = tabs.current_id().is_some_and(|id| {
+                let moved = histories.get_mut(&id).is_some_and(TabHistory::go_back);
+                if moved {
+                    if let Some(view) = views.get_mut(&id) {
+                        let _ = view.go_back();
+                    }
+                    update_history_flags(tabs, histories, id);
+                    send_state(chrome, tabs);
+                }
+                moved
+            });
+            let _ = reply.send(moved);
+        }
+        McpRequest::GoForward { reply } => {
+            let moved = tabs.current_id().is_some_and(|id| {
+                let moved = histories.get_mut(&id).is_some_and(TabHistory::go_forward);
+                if moved {
+                    if let Some(view) = views.get_mut(&id) {
+                        let _ = view.go_forward();
+                    }
+                    update_history_flags(tabs, histories, id);
+                    send_state(chrome, tabs);
+                }
+                moved
+            });
+            let _ = reply.send(moved);
+        }
+        McpRequest::Reload { reply } => {
+            let result = tabs
+                .current_id()
+                .ok_or_else(|| "no active tab".to_owned())
+                .and_then(|id| {
+                    views
+                        .get_mut(&id)
+                        .ok_or_else(|| "active tab has no content view".to_owned())
+                })
+                .and_then(|view| view.reload().map_err(|error| error.to_string()));
+            let _ = reply.send(result);
+        }
+        McpRequest::Eval {
+            target,
+            script,
+            reply,
+        } => {
+            let id = target
+                .and_then(|id| resolve_tab_id(tabs, id))
+                .or_else(|| target.is_none().then(|| tabs.current_id()).flatten());
+            let Some(id) = id else {
+                let message = if target.is_some() {
+                    "target tab not found"
+                } else {
+                    "no active tab"
+                };
+                let _ = reply.send(Err(message.to_owned()));
+                return;
+            };
+            let Some(view) = views.get(&id) else {
+                let _ = reply.send(Err("target tab has no content view".to_owned()));
+                return;
+            };
+
+            let pending_reply = Arc::new(Mutex::new(Some(reply)));
+            let callback_reply = Arc::clone(&pending_reply);
+            let evaluate_result = view.evaluate_script_with_callback(&script, move |raw| {
+                if let Ok(mut reply) = callback_reply.lock()
+                    && let Some(reply) = reply.take()
+                {
+                    let _ = reply.send(eval_result(raw));
+                }
+            });
+            if let Err(error) = evaluate_result
+                && let Ok(mut reply) = pending_reply.lock()
+                && let Some(reply) = reply.take()
+            {
+                let _ = reply.send(Err(error.to_string()));
+            }
+        }
+    }
+}
+
 fn main() -> wry::Result<()> {
-    let initial_url = env::args().nth(1).unwrap_or_else(|| DEFAULT_URL.to_owned());
-    let event_loop = EventLoop::new();
+    let (mcp_enabled, initial_url) = parse_startup_args(env::args().skip(1));
+    let event_loop = EventLoopBuilder::<McpRequest>::with_user_event().build();
     let window = WindowBuilder::new()
         .with_title("rab-browser")
         .with_inner_size(LogicalSize::new(1180.0, 760.0))
@@ -486,6 +715,11 @@ fn main() -> wry::Result<()> {
         .build_as_child(&window)?;
     chrome.set_bounds(chrome_bounds(&window))?;
 
+    if mcp_enabled {
+        browser_mcp_server::spawn(Arc::new(ProxyDispatcher(event_loop.create_proxy())));
+        eprintln!("rab-browser MCP server enabled on stdio");
+    }
+
     let mut modifiers = ModifiersState::empty();
     let mut palette_open = false;
     event_loop.run(move |event, _, control_flow| {
@@ -496,6 +730,16 @@ fn main() -> wry::Result<()> {
 
         *control_flow = ControlFlow::Wait;
         match event {
+            Event::UserEvent(request) => handle_mcp_request(
+                request,
+                &window,
+                &chrome,
+                &mut tabs,
+                &mut views,
+                &mut histories,
+                &content_events_tx,
+                &commands_tx,
+            ),
             Event::MainEventsCleared => {
                 for event in content_events_rx.try_iter() {
                     match event {
@@ -727,7 +971,7 @@ fn main() -> wry::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{NEW_TAB_URL, normalize_url};
+    use super::{NEW_TAB_URL, eval_result, normalize_url, parse_startup_args};
 
     #[test]
     fn normalizes_urls_and_search_queries() {
@@ -756,6 +1000,24 @@ mod tests {
         assert_eq!(
             normalize_url("localhost"),
             "https://www.google.com/search?q=localhost"
+        );
+    }
+
+    #[test]
+    fn mcp_flag_does_not_replace_initial_url() {
+        let (enabled, url) =
+            parse_startup_args(["--mcp".to_owned(), "https://example.org".to_owned()]);
+        assert!(enabled);
+        assert_eq!(url, "https://example.org");
+    }
+
+    #[test]
+    fn decodes_webview_evaluation_results() {
+        assert_eq!(eval_result(r#""hello""#.to_owned()), Ok("hello".to_owned()));
+        assert_eq!(eval_result("42".to_owned()), Ok("42".to_owned()));
+        assert_eq!(
+            eval_result(r#""ERR:element not found""#.to_owned()),
+            Err("element not found".to_owned())
         );
     }
 }
