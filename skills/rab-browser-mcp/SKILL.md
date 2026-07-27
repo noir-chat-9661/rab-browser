@@ -58,6 +58,10 @@ dispatches bubbling `input` and `change` events.
 - This slice has no screenshot or network-request tools.
 - Page tools execute JavaScript in the selected page. Treat `evaluate` input as
   code execution in the page's authenticated browser context.
+- `evaluate` does not await Promises: wry's evaluation callback cannot resolve a
+  returned Promise, so scripts must be synchronous. Passing `async`/`await` code
+  returns whatever the outer expression synchronously evaluates to (usually an
+  unhelpful Promise object), not the eventually-resolved value.
 - Requests time out after 10 seconds if the GUI cannot answer.
 - A missing target tab returns an error (or `false` for tab selection/closing).
 - MCP protocol data uses stdout; all rab-browser diagnostics use stderr.

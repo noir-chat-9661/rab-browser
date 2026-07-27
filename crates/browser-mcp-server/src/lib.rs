@@ -275,7 +275,7 @@ impl BrowserMcpServer {
     #[tool(description = "Execute JavaScript in the active or specified rab-browser tab")]
     async fn evaluate(&self, params: Parameters<EvaluateParams>) -> Result<String, ErrorData> {
         let source = js_string(&params.0.script)?;
-        let script = wrapped_script(&format!("return await eval({source});"));
+        let script = wrapped_script(&format!("return eval({source});"));
         self.eval(params.0.target, script).await
     }
 
@@ -313,8 +313,14 @@ fn js_string(value: &str) -> Result<String, ErrorData> {
     serde_json::to_string(value).map_err(|error| ErrorData::invalid_params(error.to_string(), None))
 }
 
+/// Wraps `body` in a *synchronous* IIFE that returns `{ok,value}`/`{ok,error}`.
+/// Must stay synchronous: wry's `evaluate_script_with_callback` does not await
+/// returned Promises, so an `async` wrapper here would hand the callback an
+/// unresolved (and unserializable) Promise instead of the eventual value.
 fn wrapped_script(body: &str) -> String {
-    format!("(async()=>{{try{{{body}}}catch(e){{return 'ERR:'+(e?.message??String(e));}}}})()")
+    format!(
+        "(()=>{{try{{const value=(()=>{{{body}}})();return {{ok:true,value}};}}catch(e){{return {{ok:false,error:e?.message??String(e)}};}}}})()"
+    )
 }
 
 #[tool_handler]
@@ -444,6 +450,8 @@ mod tests {
             assert_eq!(target, Some(7));
             assert!(script.contains("querySelector"));
             assert!(script.contains("try{"));
+            assert!(script.contains("ok:true"));
+            assert!(script.contains("ok:false"));
             reply.send(Ok("ok".to_owned())).unwrap();
             Ok(())
         });

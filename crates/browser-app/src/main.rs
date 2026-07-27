@@ -219,7 +219,7 @@ fn is_likely_domain(value: &str) -> bool {
         return false;
     };
 
-    if host.parse::<std::net::IpAddr>().is_ok() {
+    if host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok() {
         return true;
     }
 
@@ -486,16 +486,30 @@ fn parse_startup_args(args: impl IntoIterator<Item = String>) -> (bool, String) 
 }
 
 fn eval_result(raw: String) -> Result<String, String> {
-    let value = serde_json::from_str::<serde_json::Value>(&raw)
-        .unwrap_or_else(|_| serde_json::Value::String(raw.clone()));
-    let result = match value {
-        serde_json::Value::String(value) => value,
-        other => other.to_string(),
+    let envelope = serde_json::from_str::<serde_json::Value>(&raw)
+        .map_err(|error| format!("invalid evaluation result: {error}"))?;
+    let Some(envelope) = envelope.as_object() else {
+        return Err("invalid evaluation result: expected an object".to_owned());
     };
-    if let Some(message) = result.strip_prefix("ERR:") {
-        Err(message.to_owned())
+    let Some(ok) = envelope.get("ok").and_then(serde_json::Value::as_bool) else {
+        return Err("invalid evaluation result: missing `ok`".to_owned());
+    };
+
+    if ok {
+        let value = envelope
+            .get("value")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        Ok(match value {
+            serde_json::Value::String(value) => value,
+            other => other.to_string(),
+        })
     } else {
-        Ok(result)
+        Err(envelope
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| "evaluation failed without an error message".to_owned()))
     }
 }
 
@@ -997,10 +1011,9 @@ mod tests {
             normalize_url("https://"),
             "https://www.google.com/search?q=https%3A%2F%2F"
         );
-        assert_eq!(
-            normalize_url("localhost"),
-            "https://www.google.com/search?q=localhost"
-        );
+        assert_eq!(normalize_url("localhost"), "https://localhost");
+        assert_eq!(normalize_url("localhost:3000"), "https://localhost:3000");
+        assert_eq!(normalize_url("127.0.0.1:8080"), "https://127.0.0.1:8080");
     }
 
     #[test]
@@ -1013,10 +1026,20 @@ mod tests {
 
     #[test]
     fn decodes_webview_evaluation_results() {
-        assert_eq!(eval_result(r#""hello""#.to_owned()), Ok("hello".to_owned()));
-        assert_eq!(eval_result("42".to_owned()), Ok("42".to_owned()));
         assert_eq!(
-            eval_result(r#""ERR:element not found""#.to_owned()),
+            eval_result(r#"{"ok":true,"value":"hello"}"#.to_owned()),
+            Ok("hello".to_owned())
+        );
+        assert_eq!(
+            eval_result(r#"{"ok":true,"value":"ERR:element not found"}"#.to_owned()),
+            Ok("ERR:element not found".to_owned())
+        );
+        assert_eq!(
+            eval_result(r#"{"ok":true,"value":42}"#.to_owned()),
+            Ok("42".to_owned())
+        );
+        assert_eq!(
+            eval_result(r#"{"ok":false,"error":"element not found"}"#.to_owned()),
             Err("element not found".to_owned())
         );
     }
