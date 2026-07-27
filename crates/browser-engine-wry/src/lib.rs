@@ -134,6 +134,14 @@ impl WryEngine {
         self.webview.set_visible(visible)
     }
 
+    pub fn evaluate_script_with_callback(
+        &self,
+        script: &str,
+        callback: impl Fn(String) + Send + 'static,
+    ) -> Result<(), wry::Error> {
+        self.webview.evaluate_script_with_callback(script, callback)
+    }
+
     /// Opens the WebView's inspector (Web Inspector on macOS, DevTools on Windows/Linux).
     pub fn open_devtools(&self) {
         self.webview.open_devtools();
