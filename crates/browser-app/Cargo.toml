@@ -9,3 +9,5 @@ browser-core = { path = "../browser-core" }
 browser-engine-wry = { path = "../browser-engine-wry" }
 tao = "0.35.3"
 wry = { version = "0.55.1", features = ["devtools"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

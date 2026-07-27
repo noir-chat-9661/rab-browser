@@ -8,6 +8,7 @@ Cargo.lock
 node_modules/
 dist/
 .vite/
+.pnpm-store/
 
 # OS
 .DS_Store
