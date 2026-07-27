@@ -1,0 +1,10 @@
+/target
+Cargo.lock
+
+# Node (ui-chrome)
+node_modules/
+dist/
+.vite/
+
+# OS
+.DS_Store
