@@ -65,7 +65,7 @@ rab-browser/
 │   ├── browser-app/          # バイナリ本体。ウィンドウ・クロームWebView・IPC統合
 │   ├── browser-mcp-server/   # rmcp ベース。coreを操作してMCPツールを公開
 │   └── browser-plugins/      # 機能モジュール(feature単位)のレジストリ+各モジュール
-├── ui-chrome/                # クロームのフロント(Solid/Svelte + Vite)
+├── base-ui/                # クロームのフロント(Solid/Svelte + Vite)
 ├── skills/                   # browser-mcp skill構造を踏襲した機能ドキュメント群
 │   └── <feature-name>/{SKILL.md, references/, scripts/}
 ├── docs/
@@ -111,7 +111,7 @@ rab-browser/
 - キーボードショートカット最小(Cmd+L=URL入力、Cmd+R=リロード)
 
 ### Phase 2: タブ / Zen・Arc風UI
-- `ui-chrome` を Solid(または Svelte)+ Vite でセットアップ
+- `base-ui` を Solid(または Svelte)+ Vite でセットアップ
 - クロームWebView ↔ Rust の IPCプロトコル
 - 縦型サイドバータブUI、複数コンテンツWebViewの生成・破棄・表示切替
 - コマンドパレット、履歴(戻る/進む)

@@ -4,7 +4,7 @@ Cargo.lock
 # git worktree の置き場所
 /.worktrees/
 
-# Node (ui-chrome)
+# Node (base-ui)
 node_modules/
 dist/
 .vite/

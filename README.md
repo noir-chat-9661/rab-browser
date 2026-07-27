@@ -25,7 +25,7 @@ rab-browser/
 │   ├── browser-core/         # Tab/TabManager, BrowserEngine trait(GUI非依存)
 │   ├── browser-engine-wry/   # wry/tao によるWebViewエンジン実装
 │   └── browser-app/          # バイナリ本体。ウィンドウ・クロームWebView・IPC統合
-├── ui-chrome/                # サイドバー・タブUI・コマンドパレット(Solid.js + Vite)
+├── base-ui/                # サイドバー・タブUI・コマンドパレット(Solid.js + Vite)
 ├── spikes/                   # Phase 0の技術検証用の使い捨てコード
 └── docs/architecture.md      # 設計計画・技術選定の記録
 ```
@@ -35,10 +35,10 @@ rab-browser/
 前提: Rust(edition 2024)、[pnpm](https://pnpm.io/)。macOS(WKWebView)を主眼に開発している。
 
 ```bash
-# クロームUI(サイドバー等)をビルド。browser-appはこのビルド成果物(ui-chrome/dist/index.html)を
+# クロームUI(サイドバー等)をビルド。browser-appはこのビルド成果物(base-ui/dist/index.html)を
 # 実行時に読み込むため、コード変更後は毎回ビルドし直す必要がある
-pnpm --dir ui-chrome install
-pnpm --dir ui-chrome build
+pnpm --dir base-ui install
+pnpm --dir base-ui build
 
 # ブラウザ本体を起動(引数で初期URLを指定可能)
 cargo run -p browser-app -- https://example.com
@@ -67,7 +67,7 @@ cargo run -p browser-app -- https://example.com
 cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-pnpm --dir ui-chrome build   # tsc --noEmit + vite build
+pnpm --dir base-ui build   # tsc --noEmit + vite build
 ```
 
 ## Git運用
