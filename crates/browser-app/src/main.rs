@@ -25,7 +25,6 @@ use tao::{
 use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder, http::Request};
 
 const SIDEBAR_WIDTH: f64 = 264.0;
-const DEFAULT_URL: &str = "https://example.com";
 const NEW_TAB_URL: &str = concat!(
     "data:text/html;charset=utf-8,",
     "%3C!doctype%20html%3E%3Chtml%20lang=%22ja%22%3E%3Chead%3E",
@@ -481,7 +480,7 @@ fn parse_startup_args(args: impl IntoIterator<Item = String>) -> (bool, String) 
     }
     (
         mcp_enabled,
-        initial_url.unwrap_or_else(|| DEFAULT_URL.to_owned()),
+        initial_url.unwrap_or_else(|| NEW_TAB_URL.to_owned()),
     )
 }
 

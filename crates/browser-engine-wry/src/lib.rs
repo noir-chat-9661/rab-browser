@@ -4,6 +4,11 @@ use browser_core::{BrowserEngine, BrowserError};
 use tao::window::Window;
 use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder, http::Request};
 
+/// WKWebView's default UA string doesn't match a released Safari version, so
+/// some sites (e.g. Google Search) serve stale/legacy markup. Present as a
+/// current Safari on macOS instead.
+const MODERN_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
+
 const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
 (() => {
   if (window.__rabContentIntegrationInstalled) return;
@@ -111,6 +116,7 @@ impl WryEngine {
         let mut builder = WebViewBuilder::new()
             .with_initialization_script(KEYBOARD_SHORTCUT_SCRIPT)
             .with_url(url)
+            .with_user_agent(MODERN_USER_AGENT)
             .with_devtools(true)
             .with_document_title_changed_handler(on_title_changed)
             .with_on_page_load_handler(on_page_load)
