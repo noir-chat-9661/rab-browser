@@ -177,11 +177,11 @@ fn content_bounds(window: &Window) -> Rect {
 fn chrome_html() -> String {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../ui-chrome/dist/index.html"
+        "/../../base-ui/dist/index.html"
     );
     fs::read_to_string(path).unwrap_or_else(|_| {
         "<!doctype html><body style=\"margin:0;background:#171816;color:#eee;font:14px sans-serif;padding:24px\">\
-         ui-chrome is not built.<br><br>Run <code>pnpm --dir ui-chrome build</code>.</body>"
+         base-ui is not built.<br><br>Run <code>pnpm --dir base-ui build</code>.</body>"
             .to_owned()
     })
 }
