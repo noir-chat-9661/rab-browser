@@ -38,6 +38,20 @@ function send(message: Record<string, unknown>) {
   window.ipc?.postMessage(JSON.stringify(message));
 }
 
+const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+
+function hasPrimaryModifier(event: KeyboardEvent | MouseEvent) {
+  return isMac ? event.metaKey : event.ctrlKey;
+}
+
+function hasSecondaryPrimaryModifier(event: KeyboardEvent | MouseEvent) {
+  return isMac ? event.ctrlKey : event.metaKey;
+}
+
+function shortcutLabel(key: string) {
+  return `${isMac ? "⌘" : "Ctrl+"}${key}`;
+}
+
 function isNewTabUrl(url: string) {
   return (
     url === "about:blank" ||
@@ -107,9 +121,9 @@ function App() {
       }
 
       if (
-        !event.metaKey ||
+        !hasPrimaryModifier(event) ||
         event.altKey ||
-        event.ctrlKey ||
+        hasSecondaryPrimaryModifier(event) ||
         event.shiftKey ||
         event.repeat
       ) return;
@@ -120,6 +134,9 @@ function App() {
       } else if (key === "l") {
         event.preventDefault();
         openLocation();
+      } else if (key === "w") {
+        event.preventDefault();
+        send({ type: "close_current_tab" });
       }
     });
   });
@@ -169,7 +186,7 @@ function App() {
               ? "Go to a URL"
               : currentTab()?.url}
           </span>
-          <kbd>⌘L</kbd>
+          <kbd>{shortcutLabel("L")}</kbd>
         </button>
 
         <section class="tabs-section" aria-label="Open tabs">
@@ -227,7 +244,7 @@ function App() {
         >
           <Plus />
           <span>New tab</span>
-          <kbd>⌘T</kbd>
+          <kbd>{shortcutLabel("T")}</kbd>
         </button>
 
         <footer>

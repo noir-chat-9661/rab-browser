@@ -6,6 +6,10 @@ use std::{
 
 use browser_core::{BrowserEngine, TabId, TabManager};
 use browser_engine_wry::WryEngine;
+#[cfg(target_os = "macos")]
+use objc2::{rc::Retained, runtime::AnyObject};
+#[cfg(target_os = "macos")]
+use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags};
 use serde::{Deserialize, Serialize};
 use tao::{
     dpi::{LogicalPosition, LogicalSize},
@@ -34,7 +38,9 @@ enum ChromeCommand {
     SelectTab { id: u64 },
     NewTab { url: Option<String> },
     CloseTab { id: u64 },
+    CloseCurrentTab,
     Navigate { url: String },
+    ContentUrlChanged { url: String },
     OpenLocation,
     GoBack,
     GoForward,
@@ -171,15 +177,110 @@ fn normalize_url(value: &str) -> String {
     if value.is_empty() {
         return NEW_TAB_URL.to_owned();
     }
-    if value.contains("://")
+    if let Some(query) = value.strip_prefix('?') {
+        return search_url(query.trim());
+    }
+    let has_explicit_scheme = value.contains("://")
         || value.starts_with("about:")
         || value.starts_with("data:")
-        || value.starts_with("file:")
-    {
+        || value.starts_with("file:");
+    if has_explicit_scheme && url::Url::parse(value).is_ok() {
         value.to_owned()
-    } else {
+    } else if is_likely_domain(value) {
         format!("https://{value}")
+    } else {
+        search_url(value)
     }
+}
+
+fn is_likely_domain(value: &str) -> bool {
+    if value.chars().any(char::is_whitespace) {
+        return false;
+    }
+
+    let Ok(url) = url::Url::parse(&format!("https://{value}")) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+
+    let Some((domain, tld)) = host.rsplit_once('.') else {
+        return false;
+    };
+    !domain.is_empty()
+        && tld.len() >= 2
+        && tld.chars().all(|character| character.is_ascii_alphabetic())
+        && domain.split('.').all(|label| {
+            !label.is_empty()
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        })
+}
+
+fn search_url(query: &str) -> String {
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("q", query)
+        .finish();
+    format!("https://www.google.com/search?{query}")
+}
+
+fn primary_modifier_pressed(modifiers: ModifiersState) -> bool {
+    if cfg!(target_os = "macos") {
+        modifiers.super_key()
+    } else {
+        modifiers.control_key()
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn install_close_tab_shortcut_monitor(
+    commands_tx: Sender<String>,
+    event_loop_proxy: tao::event_loop::EventLoopProxy<()>,
+) -> Option<Retained<AnyObject>> {
+    use std::{ptr::NonNull, ptr::null_mut};
+
+    let handler = block2::RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
+        // wry 0.55 makes child WKWebViews return NO from performKeyEquivalent:.
+        // AppKit handles Cmd+W as a key equivalent before tao or DOM keydown,
+        // so intercept it at NSApplication dispatch and use the normal command path.
+        let event = unsafe { event.as_ref() };
+        let modifiers = event.modifierFlags();
+        let has_command = modifiers.contains(NSEventModifierFlags::Command);
+        let has_extra_modifier = modifiers.intersects(
+            NSEventModifierFlags::Control
+                | NSEventModifierFlags::Option
+                | NSEventModifierFlags::Shift,
+        );
+        let is_w = event
+            .charactersIgnoringModifiers()
+            .is_some_and(|key| key.to_string().eq_ignore_ascii_case("w"));
+
+        if has_command && !has_extra_modifier && !event.isARepeat() && is_w {
+            if commands_tx
+                .send(r#"{"type":"close_current_tab"}"#.to_owned())
+                .is_ok()
+            {
+                // The original key event is consumed below, so explicitly wake
+                // tao's waiting run loop to drain the command channel.
+                let _ = event_loop_proxy.send_event(());
+            }
+            null_mut()
+        } else {
+            event as *const NSEvent as *mut NSEvent
+        }
+    });
+
+    // SAFETY: The block returns either the original NSEvent or null to consume
+    // Cmd+W, exactly as required by addLocalMonitorForEventsMatchingMask:handler:.
+    unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &handler) }
 }
 
 fn resolve_tab_id(tabs: &TabManager, raw_id: u64) -> Option<TabId> {
@@ -357,6 +458,10 @@ fn main() -> wry::Result<()> {
 
     let (content_events_tx, content_events_rx) = mpsc::channel::<ContentEvent>();
     let (commands_tx, commands_rx) = mpsc::channel::<String>();
+    #[cfg(target_os = "macos")]
+    let close_tab_shortcut_monitor =
+        install_close_tab_shortcut_monitor(commands_tx.clone(), event_loop.create_proxy())
+            .expect("failed to install the macOS Cmd+W event monitor");
     let mut tabs = TabManager::new();
     let mut views = BTreeMap::new();
     let mut histories = BTreeMap::new();
@@ -384,6 +489,11 @@ fn main() -> wry::Result<()> {
     let mut modifiers = ModifiersState::empty();
     let mut palette_open = false;
     event_loop.run(move |event, _, control_flow| {
+        #[cfg(target_os = "macos")]
+        // Keep the monitor token with the event loop so its registration has the
+        // same explicit lifetime as the AppKit application.
+        let _keep_close_tab_shortcut_monitor_alive = &close_tab_shortcut_monitor;
+
         *control_flow = ControlFlow::Wait;
         match event {
             Event::MainEventsCleared => {
@@ -451,6 +561,22 @@ fn main() -> wry::Result<()> {
                                 }
                             }
                         }
+                        ChromeCommand::CloseCurrentTab => {
+                            if let Some(id) = tabs.current_id() {
+                                let created_replacement = close_tab(
+                                    &window,
+                                    &mut tabs,
+                                    &mut views,
+                                    &mut histories,
+                                    &content_events_tx,
+                                    &commands_tx,
+                                    id,
+                                );
+                                if created_replacement {
+                                    bring_chrome_to_front(&chrome);
+                                }
+                            }
+                        }
                         ChromeCommand::Navigate { url } => {
                             if let Some(id) = tabs.current_id() {
                                 let url = normalize_url(&url);
@@ -460,6 +586,17 @@ fn main() -> wry::Result<()> {
                                 {
                                     tab.url = url;
                                 }
+                            }
+                        }
+                        ChromeCommand::ContentUrlChanged { url } => {
+                            if let Some(id) = tabs.current_id() {
+                                if let Some(tab) = tabs.tab_mut(id) {
+                                    tab.url = url.clone();
+                                }
+                                if let Some(history) = histories.get_mut(&id) {
+                                    history.record_page_load(url);
+                                }
+                                update_history_flags(&mut tabs, &histories, id);
                             }
                         }
                         ChromeCommand::OpenLocation => focus_location(&chrome),
@@ -528,7 +665,8 @@ fn main() -> wry::Result<()> {
                 }
                 WindowEvent::ModifiersChanged(state) => modifiers = state,
                 WindowEvent::KeyboardInput { event, .. }
-                    if event.state == ElementState::Pressed && modifiers.super_key() =>
+                    if event.state == ElementState::Pressed
+                        && primary_modifier_pressed(modifiers) =>
                 {
                     match event.physical_key {
                         KeyCode::KeyL => focus_location(&chrome),
@@ -554,6 +692,23 @@ fn main() -> wry::Result<()> {
                                 let _ = view.reload();
                             }
                         }
+                        KeyCode::KeyW => {
+                            if let Some(id) = tabs.current_id() {
+                                let created_replacement = close_tab(
+                                    &window,
+                                    &mut tabs,
+                                    &mut views,
+                                    &mut histories,
+                                    &content_events_tx,
+                                    &commands_tx,
+                                    id,
+                                );
+                                if created_replacement {
+                                    bring_chrome_to_front(&chrome);
+                                }
+                                send_state(&chrome, &tabs);
+                            }
+                        }
                         KeyCode::KeyI if modifiers.alt_key() => {
                             if let Some(view) = tabs.current_id().and_then(|id| views.get(&id)) {
                                 view.open_devtools();
@@ -568,4 +723,39 @@ fn main() -> wry::Result<()> {
             _ => {}
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NEW_TAB_URL, normalize_url};
+
+    #[test]
+    fn normalizes_urls_and_search_queries() {
+        assert_eq!(normalize_url(""), NEW_TAB_URL);
+        assert_eq!(
+            normalize_url("example.com/path"),
+            "https://example.com/path"
+        );
+        assert_eq!(normalize_url("https://example.com"), "https://example.com");
+        assert_eq!(
+            normalize_url("rust wry"),
+            "https://www.google.com/search?q=rust+wry"
+        );
+        assert_eq!(
+            normalize_url("?rust wry"),
+            "https://www.google.com/search?q=rust+wry"
+        );
+        assert_eq!(
+            normalize_url("?rust & wry"),
+            "https://www.google.com/search?q=rust+%26+wry"
+        );
+        assert_eq!(
+            normalize_url("https://"),
+            "https://www.google.com/search?q=https%3A%2F%2F"
+        );
+        assert_eq!(
+            normalize_url("localhost"),
+            "https://www.google.com/search?q=localhost"
+        );
+    }
 }
