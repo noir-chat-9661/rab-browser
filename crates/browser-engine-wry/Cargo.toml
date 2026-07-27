@@ -1,0 +1,10 @@
+[package]
+name = "browser-engine-wry"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+browser-core = { path = "../browser-core" }
+tao = "0.35.3"
+wry = "0.55.1"
