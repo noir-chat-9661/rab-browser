@@ -18,6 +18,8 @@ pub struct Tab {
     pub id: TabId,
     pub url: String,
     pub title: String,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
 }
 
 impl Tab {
@@ -26,6 +28,8 @@ impl Tab {
             id,
             url: url.into(),
             title: String::new(),
+            can_go_back: false,
+            can_go_forward: false,
         }
     }
 }
@@ -110,6 +114,10 @@ impl TabManager {
 
     pub fn tab(&self, id: TabId) -> Option<&Tab> {
         self.tabs.get(&id)
+    }
+
+    pub fn tab_mut(&mut self, id: TabId) -> Option<&mut Tab> {
+        self.tabs.get_mut(&id)
     }
 
     pub fn tabs(&self) -> impl Iterator<Item = &Tab> {
