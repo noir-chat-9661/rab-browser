@@ -23,6 +23,14 @@ fn bounds(window: &tao::window::Window, y: f64, height: f64) -> Rect {
     }
 }
 
+/// Window inner height in logical (CSS-pixel-equivalent) units. `Window::inner_size()`
+/// returns physical pixels, so callers computing a content height (e.g. `full - CHROME_HEIGHT`)
+/// must go through this instead of `inner_size().height as f64` or the result is ~scale_factor
+/// times too tall on HiDPI displays, inflating page-side `100dvh`/`vh` layouts.
+fn logical_window_height(window: &tao::window::Window) -> f64 {
+    window.inner_size().to_logical::<f64>(window.scale_factor()).height
+}
+
 fn chrome_html(url: &str) -> String {
     format!(
         r#"<!doctype html><html><body style="margin:0;background:#202124;color:#fff;font:14px -apple-system,sans-serif">
@@ -59,7 +67,7 @@ fn main() -> wry::Result<()> {
     content.set_bounds(bounds(
         &window,
         CHROME_HEIGHT,
-        window.inner_size().height as f64 - CHROME_HEIGHT,
+        logical_window_height(&window) - CHROME_HEIGHT,
     ))?;
 
     let (commands_tx, commands_rx) = mpsc::channel::<String>();
@@ -96,7 +104,7 @@ fn main() -> wry::Result<()> {
                     let _ = content.set_bounds(bounds(
                         &window,
                         CHROME_HEIGHT,
-                        window.inner_size().height as f64 - CHROME_HEIGHT,
+                        logical_window_height(&window) - CHROME_HEIGHT,
                     ));
                     let _ = chrome.set_bounds(bounds(&window, 0.0, CHROME_HEIGHT));
                 }
