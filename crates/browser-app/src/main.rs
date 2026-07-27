@@ -117,6 +117,9 @@ fn main() -> wry::Result<()> {
                         KeyCode::KeyR => {
                             let _ = content.reload();
                         }
+                        KeyCode::KeyI if modifiers.alt_key() => {
+                            content.open_devtools();
+                        }
                         _ => {}
                     }
                 }

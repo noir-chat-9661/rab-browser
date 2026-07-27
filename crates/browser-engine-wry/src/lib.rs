@@ -10,7 +10,10 @@ pub struct WryEngine {
 
 impl WryEngine {
     pub fn new(window: &Window, url: &str) -> Result<Self, wry::Error> {
-        let webview = WebViewBuilder::new().with_url(url).build_as_child(window)?;
+        let webview = WebViewBuilder::new()
+            .with_url(url)
+            .with_devtools(true)
+            .build_as_child(window)?;
         Ok(Self { webview })
     }
 
@@ -20,6 +23,11 @@ impl WryEngine {
 
     pub fn focus(&self) -> Result<(), wry::Error> {
         self.webview.focus()
+    }
+
+    /// Opens the WebView's inspector (Web Inspector on macOS, DevTools on Windows/Linux).
+    pub fn open_devtools(&self) {
+        self.webview.open_devtools();
     }
 
     pub fn webview(&self) -> &WebView {
