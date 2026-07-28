@@ -53,11 +53,14 @@ function shortcutLabel(key: string) {
   return `${isMac ? "⌘" : "Ctrl+"}${key}`;
 }
 
+// Must match crates/browser-app/src/main.rs's NEW_TAB_URL exactly (not a
+// prefix match) so an arbitrary data:text/html page a user navigates to
+// isn't mistaken for the new-tab placeholder.
+const NEW_TAB_URL =
+  "data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%20lang=%22ja%22%3E%3Chead%3E%3Cmeta%20charset=%22utf-8%22%3E%3Ctitle%3E%E6%96%B0%E3%81%97%E3%81%84%E3%82%BF%E3%83%96%3C/title%3E%3Cstyle%3Ehtml%2Cbody%7Bheight%3A100%25%7Dbody%7Bmargin%3A0%3Bdisplay%3Agrid%3Bplace-items%3Acenter%3Bbackground%3A%23171816%3Bcolor%3A%23a2a59d%3Bfont%3A14px%20system-ui%2Csans-serif%7D%3C/style%3E%3C/head%3E%3Cbody%3E%E6%96%B0%E3%81%97%E3%81%84%E3%82%BF%E3%83%96%3C/body%3E%3C/html%3E";
+
 function isNewTabUrl(url: string) {
-  return (
-    url === "about:blank" ||
-    url.startsWith("data:text/html;charset=utf-8,")
-  );
+  return url === "about:blank" || url === NEW_TAB_URL;
 }
 
 function displayTitle(tab: Tab) {

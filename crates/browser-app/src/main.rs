@@ -187,7 +187,7 @@ fn content_bounds(window: &Window, sidebar_visible: bool) -> Rect {
 }
 
 fn is_new_tab_url(url: &str) -> bool {
-    url == "about:blank" || url.starts_with("data:text/html;charset=utf-8,")
+    url == "about:blank" || url == NEW_TAB_URL
 }
 
 fn is_only_new_tab(tabs: &TabManager, id: TabId) -> bool {
@@ -855,6 +855,7 @@ fn main() -> wry::Result<()> {
                         ContentEvent::PageLoaded { id, url } => {
                             if let Some(tab) = tabs.tab_mut(id) {
                                 tab.url = url.clone();
+                                tab.favicon_url = None;
                             }
                             if let Some(history) = histories.get_mut(&id) {
                                 history.record_page_load(url);
