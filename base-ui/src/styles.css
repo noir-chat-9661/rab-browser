@@ -70,37 +70,10 @@ svg {
 .toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   height: 32px;
   margin-bottom: 15px;
   padding: 0 3px;
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.brand-mark {
-  display: grid;
-  width: 22px;
-  height: 22px;
-  place-items: center;
-  color: #171816;
-  background: #d6ff72;
-  border-radius: 3px;
-  font-family: Georgia, serif;
-  font-size: 16px;
-  font-style: italic;
-  font-weight: 700;
-}
-
-.brand-name {
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 15px;
-  font-style: italic;
-  letter-spacing: 0.03em;
 }
 
 .history-controls {
@@ -240,6 +213,19 @@ kbd {
   border-color: #d6ff72;
 }
 
+.tab-favicon.has-image {
+  padding: 3px;
+  background: #22241f;
+  border-color: #3c3f38;
+}
+
+.tab-favicon img {
+  display: block;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
 .tab-copy {
   display: flex;
   min-width: 0;
@@ -317,28 +303,6 @@ kbd {
   font-weight: 600;
 }
 
-footer {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  height: 28px;
-  margin-top: 8px;
-  padding: 0 7px;
-  color: #5f635a;
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 8px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.status-dot {
-  width: 5px;
-  height: 5px;
-  background: #d6ff72;
-  border-radius: 50%;
-  box-shadow: 0 0 7px rgba(214, 255, 114, 0.45);
-}
-
 .palette-backdrop {
   position: absolute;
   z-index: 10;
@@ -389,6 +353,24 @@ footer {
   border-radius: 3px;
 }
 
+.command-input-wrap.search-mode {
+  grid-template-columns: 18px auto minmax(0, 1fr);
+}
+
+.search-provider {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  color: #fff;
+  background: #14233e;
+  border: 1px solid #2b3c59;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.015em;
+}
+
 .command-input-wrap input {
   width: 100%;
   min-width: 0;
@@ -402,6 +384,11 @@ footer {
 
 .command-input-wrap input::placeholder {
   color: #5f635a;
+  opacity: 1;
+}
+
+.command-input-wrap.search-mode input::placeholder {
+  color: #858a80;
 }
 
 .command-hint {

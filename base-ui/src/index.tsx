@@ -6,6 +6,7 @@ type Tab = {
   id: number;
   url: string;
   title: string;
+  faviconUrl: string | null;
   canGoBack: boolean;
   canGoForward: boolean;
 };
@@ -52,11 +53,14 @@ function shortcutLabel(key: string) {
   return `${isMac ? "⌘" : "Ctrl+"}${key}`;
 }
 
+// Must match crates/browser-app/src/main.rs's NEW_TAB_URL exactly (not a
+// prefix match) so an arbitrary data:text/html page a user navigates to
+// isn't mistaken for the new-tab placeholder.
+const NEW_TAB_URL =
+  "data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%20lang=%22ja%22%3E%3Chead%3E%3Cmeta%20charset=%22utf-8%22%3E%3Ctitle%3E%E6%96%B0%E3%81%97%E3%81%84%E3%82%BF%E3%83%96%3C/title%3E%3Cstyle%3Ehtml%2Cbody%7Bheight%3A100%25%7Dbody%7Bmargin%3A0%3Bdisplay%3Agrid%3Bplace-items%3Acenter%3Bbackground%3A%23171816%3Bcolor%3A%23a2a59d%3Bfont%3A14px%20system-ui%2Csans-serif%7D%3C/style%3E%3C/head%3E%3Cbody%3E%E6%96%B0%E3%81%97%E3%81%84%E3%82%BF%E3%83%96%3C/body%3E%3C/html%3E";
+
 function isNewTabUrl(url: string) {
-  return (
-    url === "about:blank" ||
-    url.startsWith("data:text/html;charset=utf-8,")
-  );
+  return url === "about:blank" || url === NEW_TAB_URL;
 }
 
 function displayTitle(tab: Tab) {
@@ -77,6 +81,10 @@ function App() {
 
   const currentTab = createMemo(() =>
     state().tabs.find((tab) => tab.id === state().currentTabId),
+  );
+  const searchMode = createMemo(() => locationValue().startsWith("?"));
+  const displayedLocationValue = createMemo(() =>
+    searchMode() ? locationValue().slice(1) : locationValue(),
   );
 
   const closeLocation = () => {
@@ -134,6 +142,14 @@ function App() {
       } else if (key === "l") {
         event.preventDefault();
         openLocation();
+      } else if (key === "r") {
+        event.preventDefault();
+        if (!isNewTabUrl(currentTab()?.url ?? "")) {
+          send({ type: "reload" });
+        }
+      } else if (key === "s") {
+        event.preventDefault();
+        send({ type: "toggle_sidebar" });
       } else if (key === "w") {
         event.preventDefault();
         send({ type: "close_current_tab" });
@@ -145,10 +161,6 @@ function App() {
     <main class="chrome-shell">
       <div class="sidebar-panel">
         <header class="toolbar">
-          <div class="brand" aria-label="rab browser">
-            <span class="brand-mark">r</span>
-            <span class="brand-name">rab</span>
-          </div>
           <div class="history-controls">
             <button
               class="icon-button"
@@ -172,7 +184,12 @@ function App() {
               class="icon-button"
               type="button"
               aria-label="Reload"
-              onClick={() => send({ type: "reload" })}
+              disabled={isNewTabUrl(currentTab()?.url ?? "")}
+              onClick={() => {
+                if (!isNewTabUrl(currentTab()?.url ?? "")) {
+                  send({ type: "reload" });
+                }
+              }}
             >
               <Reload />
             </button>
@@ -203,8 +220,18 @@ function App() {
                   type="button"
                   onClick={() => send({ type: "select_tab", id: tab.id })}
                 >
-                  <span class="tab-favicon">
-                    {displayTitle(tab).slice(0, 1).toUpperCase()}
+                  <span
+                    class="tab-favicon"
+                    classList={{ "has-image": Boolean(tab.faviconUrl) }}
+                  >
+                    <Show
+                      when={tab.faviconUrl}
+                      fallback={displayTitle(tab).slice(0, 1).toUpperCase()}
+                    >
+                      {(faviconUrl) => (
+                        <img src={faviconUrl()} alt="" aria-hidden="true" />
+                      )}
+                    </Show>
                   </span>
                   <span class="tab-copy">
                     <span class="tab-title">{displayTitle(tab)}</span>
@@ -246,11 +273,6 @@ function App() {
           <span>New tab</span>
           <kbd>{shortcutLabel("T")}</kbd>
         </button>
-
-        <footer>
-          <span class="status-dot" />
-          <span>Local session</span>
-        </footer>
       </div>
 
       <Show when={locationOpen()}>
@@ -267,17 +289,41 @@ function App() {
             onClick={(event) => event.stopPropagation()}
           >
             <label id="location-label" for="location">Navigate</label>
-            <div class="command-input-wrap">
+            <div
+              class="command-input-wrap"
+              classList={{ "search-mode": searchMode() }}
+            >
               <Search />
+              <Show when={searchMode()}>
+                <span class="search-provider">Google</span>
+              </Show>
               <input
                 ref={locationInput}
                 id="location"
-                value={locationValue()}
-                onInput={(event) => setLocationValue(event.currentTarget.value)}
+                value={displayedLocationValue()}
+                onInput={(event) =>
+                  setLocationValue(
+                    searchMode()
+                      ? `?${event.currentTarget.value}`
+                      : event.currentTarget.value,
+                  )
+                }
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Backspace" &&
+                    searchMode() &&
+                    displayedLocationValue() === ""
+                  ) {
+                    event.preventDefault();
+                    setLocationValue("");
+                  }
+                }}
                 autocomplete="off"
                 autocapitalize="off"
                 spellcheck={false}
-                placeholder="URL or domain"
+                placeholder={
+                  searchMode() ? "ウェブを検索します" : "URL or domain"
+                }
               />
             </div>
             <div class="command-hint">

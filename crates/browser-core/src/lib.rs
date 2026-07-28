@@ -18,6 +18,7 @@ pub struct Tab {
     pub id: TabId,
     pub url: String,
     pub title: String,
+    pub favicon_url: Option<String>,
     pub can_go_back: bool,
     pub can_go_forward: bool,
 }
@@ -28,6 +29,7 @@ impl Tab {
             id,
             url: url.into(),
             title: String::new(),
+            favicon_url: None,
             can_go_back: false,
             can_go_forward: false,
         }

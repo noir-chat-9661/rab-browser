@@ -58,6 +58,8 @@ enum ChromeCommand {
     GoBack,
     GoForward,
     Reload,
+    ToggleSidebar,
+    FaviconChanged { url: String },
     OpenDevtools,
     PaletteOpened,
     PaletteClosed,
@@ -67,6 +69,7 @@ enum ChromeCommand {
 enum ContentEvent {
     TitleChanged { id: TabId, title: String },
     PageLoaded { id: TabId, url: String },
+    FaviconChanged { id: TabId, url: String },
 }
 
 #[derive(Serialize)]
@@ -83,6 +86,7 @@ struct ChromeTab<'a> {
     id: u64,
     url: &'a str,
     title: &'a str,
+    favicon_url: Option<&'a str>,
     can_go_back: bool,
     can_go_forward: bool,
 }
@@ -111,6 +115,10 @@ impl TabHistory {
         }
 
         if self.entries.get(self.cursor) == Some(&url) {
+            return;
+        }
+        if self.entries.len() == 1 && self.cursor == 0 && is_new_tab_url(&self.entries[0]) {
+            self.entries[0] = url;
             return;
         }
         self.entries.truncate(self.cursor + 1);
@@ -164,20 +172,34 @@ fn full_window_bounds(window: &Window) -> Rect {
     }
 }
 
-fn content_bounds(window: &Window) -> Rect {
+fn content_bounds(window: &Window, sidebar_visible: bool) -> Rect {
     let size = logical_window_size(window);
-    let sidebar_width = SIDEBAR_WIDTH.min(size.width);
+    let sidebar_width = if sidebar_visible {
+        SIDEBAR_WIDTH.min(size.width)
+    } else {
+        0.0
+    };
     Rect {
         position: LogicalPosition::new(sidebar_width, 0.0).into(),
         size: LogicalSize::new((size.width - sidebar_width).max(0.0), size.height).into(),
     }
 }
 
+fn is_new_tab_url(url: &str) -> bool {
+    url == "about:blank" || url == NEW_TAB_URL
+}
+
+fn is_only_new_tab(tabs: &TabManager, id: TabId) -> bool {
+    tabs.tabs().count() == 1 && tabs.tab(id).is_some_and(|tab| is_new_tab_url(&tab.url))
+}
+
+fn current_tab_is_new(tabs: &TabManager) -> bool {
+    tabs.current_tab()
+        .is_some_and(|tab| is_new_tab_url(&tab.url))
+}
+
 fn chrome_html() -> String {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../base-ui/dist/index.html"
-    );
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../base-ui/dist/index.html");
     fs::read_to_string(path).unwrap_or_else(|_| {
         "<!doctype html><body style=\"margin:0;background:#171816;color:#eee;font:14px sans-serif;padding:24px\">\
          base-ui is not built.<br><br>Run <code>pnpm --dir base-ui build</code>.</body>"
@@ -306,13 +328,15 @@ fn create_content_view(
     window: &Window,
     id: TabId,
     url: &str,
+    sidebar_visible: bool,
     events_tx: &Sender<ContentEvent>,
     commands_tx: &Sender<String>,
 ) -> wry::Result<WryEngine> {
     let title_tx = events_tx.clone();
     let load_tx = events_tx.clone();
+    let favicon_tx = events_tx.clone();
     let content_commands_tx = commands_tx.clone();
-    let bounds = content_bounds(window);
+    let bounds = content_bounds(window, sidebar_visible);
     let view = WryEngine::new_with_handlers_and_bounds(
         window,
         url,
@@ -326,12 +350,19 @@ fn create_content_view(
             }
         },
         move |request: Request<String>| {
-            let _ = content_commands_tx.send(request.into_body());
+            let body = request.into_body();
+            if let Ok(ChromeCommand::FaviconChanged { url }) =
+                serde_json::from_str::<ChromeCommand>(&body)
+            {
+                let _ = favicon_tx.send(ContentEvent::FaviconChanged { id, url });
+            } else {
+                let _ = content_commands_tx.send(body);
+            }
         },
     )?;
     // Keep this as a post-build correction too: the window scale or size may
     // have changed while WKWebView was being initialized.
-    view.set_bounds(content_bounds(window))?;
+    view.set_bounds(content_bounds(window, sidebar_visible))?;
     Ok(view)
 }
 
@@ -388,6 +419,7 @@ fn send_state(chrome: &WebView, tabs: &TabManager) {
                 id: tab.id.get(),
                 url: &tab.url,
                 title: &tab.title,
+                favicon_url: tab.favicon_url.as_deref(),
                 can_go_back: tab.can_go_back,
                 can_go_forward: tab.can_go_forward,
             })
@@ -399,6 +431,7 @@ fn send_state(chrome: &WebView, tabs: &TabManager) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn add_tab(
     window: &Window,
     tabs: &mut TabManager,
@@ -407,10 +440,11 @@ fn add_tab(
     events_tx: &Sender<ContentEvent>,
     commands_tx: &Sender<String>,
     url: &str,
+    sidebar_visible: bool,
 ) -> wry::Result<TabId> {
     let url = normalize_url(url);
     let id = tabs.add_tab(url.clone());
-    match create_content_view(window, id, &url, events_tx, commands_tx) {
+    match create_content_view(window, id, &url, sidebar_visible, events_tx, commands_tx) {
         Ok(view) => {
             histories.insert(id, TabHistory::new(url));
             views.insert(id, view);
@@ -424,6 +458,7 @@ fn add_tab(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn close_tab(
     window: &Window,
     tabs: &mut TabManager,
@@ -432,13 +467,18 @@ fn close_tab(
     events_tx: &Sender<ContentEvent>,
     commands_tx: &Sender<String>,
     id: TabId,
-) -> bool {
+    sidebar_visible: bool,
+) -> CloseTabResult {
+    if is_only_new_tab(tabs, id) {
+        return CloseTabResult::Ignored;
+    }
+
     views.remove(&id);
     histories.remove(&id);
     tabs.remove_tab(id);
 
     if tabs.current_id().is_none() {
-        return add_tab(
+        return if add_tab(
             window,
             tabs,
             views,
@@ -446,15 +486,54 @@ fn close_tab(
             events_tx,
             commands_tx,
             NEW_TAB_URL,
+            sidebar_visible,
         )
-        .is_ok();
+        .is_ok()
+        {
+            CloseTabResult::CreatedReplacement
+        } else {
+            CloseTabResult::Closed
+        };
     } else if let Some(current) = tabs.current_id() {
         select_content_view(tabs, views, current);
     }
-    false
+    CloseTabResult::Closed
 }
 
-fn focus_location(chrome: &WebView) {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CloseTabResult {
+    Ignored,
+    Closed,
+    CreatedReplacement,
+}
+
+fn apply_layout(
+    window: &Window,
+    chrome: &WebView,
+    views: &BTreeMap<TabId, WryEngine>,
+    sidebar_visible: bool,
+    palette_open: bool,
+) {
+    let content_rect = content_bounds(window, sidebar_visible);
+    for view in views.values() {
+        let _ = view.set_bounds(content_rect);
+    }
+
+    let chrome_visible = sidebar_visible || palette_open;
+    let chrome_rect = if palette_open {
+        full_window_bounds(window)
+    } else {
+        chrome_bounds(window)
+    };
+    let _ = chrome.set_bounds(chrome_rect);
+    let _ = chrome.set_visible(chrome_visible);
+}
+
+fn focus_location(window: &Window, chrome: &WebView, palette_open: &mut bool) {
+    *palette_open = true;
+    let _ = chrome.set_visible(true);
+    let _ = chrome.set_bounds(full_window_bounds(window));
+    bring_chrome_to_front(chrome);
     let _ = chrome.focus();
     let _ = chrome.evaluate_script("window.rabChrome?.openLocation();");
 }
@@ -522,6 +601,7 @@ fn handle_mcp_request(
     histories: &mut BTreeMap<TabId, TabHistory>,
     content_events_tx: &Sender<ContentEvent>,
     commands_tx: &Sender<String>,
+    sidebar_visible: bool,
 ) {
     match request {
         McpRequest::Wake => {}
@@ -547,6 +627,7 @@ fn handle_mcp_request(
                 content_events_tx,
                 commands_tx,
                 url.as_deref().unwrap_or(NEW_TAB_URL),
+                sidebar_visible,
             ) {
                 Ok(id) => {
                     bring_chrome_to_front(chrome);
@@ -564,7 +645,7 @@ fn handle_mcp_request(
                 let _ = reply.send(false);
                 return;
             };
-            let created_replacement = close_tab(
+            let result = close_tab(
                 window,
                 tabs,
                 views,
@@ -572,12 +653,13 @@ fn handle_mcp_request(
                 content_events_tx,
                 commands_tx,
                 id,
+                sidebar_visible,
             );
-            if created_replacement {
+            if result == CloseTabResult::CreatedReplacement {
                 bring_chrome_to_front(chrome);
             }
             send_state(chrome, tabs);
-            let _ = reply.send(true);
+            let _ = reply.send(result != CloseTabResult::Ignored);
         }
         McpRequest::SelectTab { id, reply } => {
             let selected = resolve_tab_id(tabs, id).is_some_and(|id| {
@@ -602,6 +684,7 @@ fn handle_mcp_request(
             if result.is_ok() {
                 if let Some(tab) = tabs.tab_mut(id) {
                     tab.url = url;
+                    tab.favicon_url = None;
                 }
                 send_state(chrome, tabs);
             }
@@ -636,6 +719,10 @@ fn handle_mcp_request(
             let _ = reply.send(moved);
         }
         McpRequest::Reload { reply } => {
+            if current_tab_is_new(tabs) {
+                let _ = reply.send(Ok(()));
+                return;
+            }
             let result = tabs
                 .current_id()
                 .ok_or_else(|| "no active tab".to_owned())
@@ -707,6 +794,7 @@ fn main() -> wry::Result<()> {
     let mut tabs = TabManager::new();
     let mut views = BTreeMap::new();
     let mut histories = BTreeMap::new();
+    let mut sidebar_visible = true;
     add_tab(
         &window,
         &mut tabs,
@@ -715,6 +803,7 @@ fn main() -> wry::Result<()> {
         &content_events_tx,
         &commands_tx,
         &initial_url,
+        sidebar_visible,
     )?;
 
     let chrome_commands_tx = commands_tx.clone();
@@ -752,6 +841,7 @@ fn main() -> wry::Result<()> {
                 &mut histories,
                 &content_events_tx,
                 &commands_tx,
+                sidebar_visible,
             ),
             Event::MainEventsCleared => {
                 for event in content_events_rx.try_iter() {
@@ -764,11 +854,17 @@ fn main() -> wry::Result<()> {
                         ContentEvent::PageLoaded { id, url } => {
                             if let Some(tab) = tabs.tab_mut(id) {
                                 tab.url = url.clone();
+                                tab.favicon_url = None;
                             }
                             if let Some(history) = histories.get_mut(&id) {
                                 history.record_page_load(url);
                             }
                             update_history_flags(&mut tabs, &histories, id);
+                        }
+                        ContentEvent::FaviconChanged { id, url } => {
+                            if let Some(tab) = tabs.tab_mut(id) {
+                                tab.favicon_url = (!url.is_empty()).then_some(url);
+                            }
                         }
                     }
                     send_state(&chrome, &tabs);
@@ -794,17 +890,18 @@ fn main() -> wry::Result<()> {
                                 &content_events_tx,
                                 &commands_tx,
                                 url.as_deref().unwrap_or(NEW_TAB_URL),
+                                sidebar_visible,
                             )
                             .is_ok()
                             {
                                 bring_chrome_to_front(&chrome);
                                 send_state(&chrome, &tabs);
-                                focus_location(&chrome);
+                                focus_location(&window, &chrome, &mut palette_open);
                             }
                         }
                         ChromeCommand::CloseTab { id } => {
                             if let Some(id) = resolve_tab_id(&tabs, id) {
-                                let created_replacement = close_tab(
+                                let result = close_tab(
                                     &window,
                                     &mut tabs,
                                     &mut views,
@@ -812,15 +909,16 @@ fn main() -> wry::Result<()> {
                                     &content_events_tx,
                                     &commands_tx,
                                     id,
+                                    sidebar_visible,
                                 );
-                                if created_replacement {
+                                if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
                                 }
                             }
                         }
                         ChromeCommand::CloseCurrentTab => {
                             if let Some(id) = tabs.current_id() {
-                                let created_replacement = close_tab(
+                                let result = close_tab(
                                     &window,
                                     &mut tabs,
                                     &mut views,
@@ -828,8 +926,9 @@ fn main() -> wry::Result<()> {
                                     &content_events_tx,
                                     &commands_tx,
                                     id,
+                                    sidebar_visible,
                                 );
-                                if created_replacement {
+                                if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
                                 }
                             }
@@ -842,6 +941,7 @@ fn main() -> wry::Result<()> {
                                     && let Some(tab) = tabs.tab_mut(id)
                                 {
                                     tab.url = url;
+                                    tab.favicon_url = None;
                                 }
                             }
                         }
@@ -856,7 +956,9 @@ fn main() -> wry::Result<()> {
                                 update_history_flags(&mut tabs, &histories, id);
                             }
                         }
-                        ChromeCommand::OpenLocation => focus_location(&chrome),
+                        ChromeCommand::OpenLocation => {
+                            focus_location(&window, &chrome, &mut palette_open);
+                        }
                         ChromeCommand::GoBack => {
                             if let Some(id) = tabs.current_id()
                                 && let Some(history) = histories.get_mut(&id)
@@ -880,9 +982,27 @@ fn main() -> wry::Result<()> {
                             }
                         }
                         ChromeCommand::Reload => {
-                            if let Some(view) = tabs.current_id().and_then(|id| views.get_mut(&id))
+                            if !current_tab_is_new(&tabs)
+                                && let Some(view) =
+                                    tabs.current_id().and_then(|id| views.get_mut(&id))
                             {
                                 let _ = view.reload();
+                            }
+                        }
+                        ChromeCommand::ToggleSidebar => {
+                            sidebar_visible = !sidebar_visible;
+                            apply_layout(&window, &chrome, &views, sidebar_visible, palette_open);
+                            if sidebar_visible || palette_open {
+                                bring_chrome_to_front(&chrome);
+                            } else if let Some(view) =
+                                tabs.current_id().and_then(|id| views.get(&id))
+                            {
+                                let _ = view.focus();
+                            }
+                        }
+                        ChromeCommand::FaviconChanged { url } => {
+                            if let Some(tab) = tabs.current_tab_mut() {
+                                tab.favicon_url = (!url.is_empty()).then_some(url);
                             }
                         }
                         ChromeCommand::OpenDevtools => {
@@ -892,13 +1012,13 @@ fn main() -> wry::Result<()> {
                         }
                         ChromeCommand::PaletteOpened => {
                             palette_open = true;
-                            let _ = chrome.set_bounds(full_window_bounds(&window));
+                            apply_layout(&window, &chrome, &views, sidebar_visible, palette_open);
                             bring_chrome_to_front(&chrome);
                             let _ = chrome.focus();
                         }
                         ChromeCommand::PaletteClosed => {
                             palette_open = false;
-                            let _ = chrome.set_bounds(chrome_bounds(&window));
+                            apply_layout(&window, &chrome, &views, sidebar_visible, palette_open);
                             if let Some(view) = tabs.current_id().and_then(|id| views.get(&id)) {
                                 let _ = view.focus();
                             }
@@ -909,16 +1029,7 @@ fn main() -> wry::Result<()> {
             }
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::Resized(_) => {
-                    let bounds = content_bounds(&window);
-                    for view in views.values() {
-                        let _ = view.set_bounds(bounds);
-                    }
-                    let chrome_rect = if palette_open {
-                        full_window_bounds(&window)
-                    } else {
-                        chrome_bounds(&window)
-                    };
-                    let _ = chrome.set_bounds(chrome_rect);
+                    apply_layout(&window, &chrome, &views, sidebar_visible, palette_open);
                 }
                 WindowEvent::ModifiersChanged(state) => modifiers = state,
                 WindowEvent::KeyboardInput { event, .. }
@@ -926,7 +1037,9 @@ fn main() -> wry::Result<()> {
                         && primary_modifier_pressed(modifiers) =>
                 {
                     match event.physical_key {
-                        KeyCode::KeyL => focus_location(&chrome),
+                        KeyCode::KeyL => {
+                            focus_location(&window, &chrome, &mut palette_open);
+                        }
                         KeyCode::KeyT
                             if add_tab(
                                 &window,
@@ -936,22 +1049,44 @@ fn main() -> wry::Result<()> {
                                 &content_events_tx,
                                 &commands_tx,
                                 NEW_TAB_URL,
+                                sidebar_visible,
                             )
                             .is_ok() =>
                         {
                             send_state(&chrome, &tabs);
                             bring_chrome_to_front(&chrome);
-                            focus_location(&chrome);
+                            focus_location(&window, &chrome, &mut palette_open);
                         }
                         KeyCode::KeyR => {
-                            if let Some(view) = tabs.current_id().and_then(|id| views.get_mut(&id))
+                            if !current_tab_is_new(&tabs)
+                                && let Some(view) =
+                                    tabs.current_id().and_then(|id| views.get_mut(&id))
                             {
                                 let _ = view.reload();
                             }
                         }
+                        KeyCode::KeyS
+                            if !modifiers.alt_key()
+                                && !modifiers.shift_key()
+                                && if cfg!(target_os = "macos") {
+                                    !modifiers.control_key()
+                                } else {
+                                    !modifiers.super_key()
+                                } =>
+                        {
+                            sidebar_visible = !sidebar_visible;
+                            apply_layout(&window, &chrome, &views, sidebar_visible, palette_open);
+                            if sidebar_visible || palette_open {
+                                bring_chrome_to_front(&chrome);
+                            } else if let Some(view) =
+                                tabs.current_id().and_then(|id| views.get(&id))
+                            {
+                                let _ = view.focus();
+                            }
+                        }
                         KeyCode::KeyW => {
                             if let Some(id) = tabs.current_id() {
-                                let created_replacement = close_tab(
+                                let result = close_tab(
                                     &window,
                                     &mut tabs,
                                     &mut views,
@@ -959,8 +1094,9 @@ fn main() -> wry::Result<()> {
                                     &content_events_tx,
                                     &commands_tx,
                                     id,
+                                    sidebar_visible,
                                 );
-                                if created_replacement {
+                                if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
                                 }
                                 send_state(&chrome, &tabs);
@@ -984,7 +1120,10 @@ fn main() -> wry::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{NEW_TAB_URL, eval_result, normalize_url, parse_startup_args};
+    use super::{
+        NEW_TAB_URL, TabHistory, eval_result, is_only_new_tab, normalize_url, parse_startup_args,
+    };
+    use browser_core::TabManager;
 
     #[test]
     fn normalizes_urls_and_search_queries() {
@@ -1021,6 +1160,40 @@ mod tests {
             parse_startup_args(["--mcp".to_owned(), "https://example.org".to_owned()]);
         assert!(enabled);
         assert_eq!(url, "https://example.org");
+    }
+
+    #[test]
+    fn first_navigation_replaces_new_tab_history() {
+        let mut history = TabHistory::new(NEW_TAB_URL.to_owned());
+
+        history.record_page_load("https://example.com".to_owned());
+
+        assert_eq!(history.entries, ["https://example.com"]);
+        assert!(!history.can_go_back());
+    }
+
+    #[test]
+    fn later_navigations_are_added_to_history() {
+        let mut history = TabHistory::new(NEW_TAB_URL.to_owned());
+        history.record_page_load("https://example.com".to_owned());
+
+        history.record_page_load("https://example.org".to_owned());
+
+        assert_eq!(
+            history.entries,
+            ["https://example.com", "https://example.org"]
+        );
+        assert!(history.can_go_back());
+    }
+
+    #[test]
+    fn identifies_the_only_new_tab() {
+        let mut tabs = TabManager::new();
+        let new_tab = tabs.add_tab(NEW_TAB_URL);
+        assert!(is_only_new_tab(&tabs, new_tab));
+
+        tabs.add_tab("https://example.com");
+        assert!(!is_only_new_tab(&tabs, new_tab));
     }
 
     #[test]
