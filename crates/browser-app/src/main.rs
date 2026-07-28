@@ -1190,11 +1190,12 @@ fn main() -> wry::Result<()> {
                         ChromeCommand::RemoveBookmark { url } => {
                             bookmarks.remove(&url);
                         }
-                        ChromeCommand::FaviconChanged { url } => {
-                            if let Some(tab) = tabs.current_tab_mut() {
-                                tab.favicon_url = (!url.is_empty()).then_some(url);
-                            }
-                        }
+                        // Content-originated favicon_changed messages are intercepted and
+                        // rerouted to ContentEvent::FaviconChanged (with the correct tab id)
+                        // inside create_content_view's IPC handler, never reaching this loop.
+                        // Chrome itself never sends this command. Kept only for match
+                        // exhaustiveness.
+                        ChromeCommand::FaviconChanged { .. } => {}
                         ChromeCommand::OpenDevtools => {
                             if let Some(view) = tabs.current_id().and_then(|id| views.get(&id)) {
                                 view.open_devtools();
