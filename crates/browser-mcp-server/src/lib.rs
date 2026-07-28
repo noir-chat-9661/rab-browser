@@ -137,6 +137,9 @@ struct TypeParams {
     target: Option<u64>,
 }
 
+// `tool_router` is populated by the #[tool_router] macro and read by the
+// generated #[tool_handler] dispatch, not directly by our code, so rustc's
+// dead-code analysis can't see the use — this isn't actually unused.
 #[allow(dead_code)]
 #[derive(Clone)]
 struct BrowserMcpServer {
