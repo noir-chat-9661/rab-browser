@@ -13,6 +13,9 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
   const hasPrimaryModifier = (event) => isMac ? event.metaKey : event.ctrlKey;
   const hasSecondaryPrimaryModifier = (event) =>
     isMac ? event.ctrlKey : event.metaKey;
+  const isNewTabUrl = (url) =>
+    url === "about:blank" ||
+    url.startsWith("data:text/html;charset=utf-8,");
   const postMessage = (message) => {
     window.ipc.postMessage(JSON.stringify(message));
   };
@@ -26,7 +29,10 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
     let type = null;
     if (primaryOnly && key === "t") type = "new_tab";
     else if (primaryOnly && key === "l") type = "open_location";
-    else if (primaryOnly && key === "r") type = "reload";
+    else if (primaryOnly && key === "r" && !isNewTabUrl(location.href)) {
+      type = "reload";
+    }
+    else if (primaryOnly && key === "s") type = "toggle_sidebar";
     else if (primaryOnly && key === "w") type = "close_current_tab";
     else if (
       event.altKey &&
@@ -71,6 +77,26 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
     };
   }
   window.addEventListener("popstate", notifyUrlChanged);
+
+  let lastFaviconUrl;
+  const notifyFaviconChanged = () => {
+    const icon = document.querySelector(
+      'link[rel~="icon"], link[rel="shortcut icon"]',
+    );
+    const url = icon?.href ?? "";
+    if (url === lastFaviconUrl) return;
+    lastFaviconUrl = url;
+    postMessage({ type: "favicon_changed", url });
+  };
+
+  document.addEventListener("DOMContentLoaded", notifyFaviconChanged);
+  window.addEventListener("load", notifyFaviconChanged);
+  new MutationObserver(notifyFaviconChanged).observe(document, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["href", "rel"],
+  });
 })();
 "#;
 

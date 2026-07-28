@@ -6,6 +6,7 @@ type Tab = {
   id: number;
   url: string;
   title: string;
+  faviconUrl: string | null;
   canGoBack: boolean;
   canGoForward: boolean;
 };
@@ -78,6 +79,10 @@ function App() {
   const currentTab = createMemo(() =>
     state().tabs.find((tab) => tab.id === state().currentTabId),
   );
+  const searchMode = createMemo(() => locationValue().startsWith("?"));
+  const displayedLocationValue = createMemo(() =>
+    searchMode() ? locationValue().slice(1) : locationValue(),
+  );
 
   const closeLocation = () => {
     if (!locationOpen()) return;
@@ -134,6 +139,14 @@ function App() {
       } else if (key === "l") {
         event.preventDefault();
         openLocation();
+      } else if (key === "r") {
+        event.preventDefault();
+        if (!isNewTabUrl(currentTab()?.url ?? "")) {
+          send({ type: "reload" });
+        }
+      } else if (key === "s") {
+        event.preventDefault();
+        send({ type: "toggle_sidebar" });
       } else if (key === "w") {
         event.preventDefault();
         send({ type: "close_current_tab" });
@@ -145,10 +158,6 @@ function App() {
     <main class="chrome-shell">
       <div class="sidebar-panel">
         <header class="toolbar">
-          <div class="brand" aria-label="rab browser">
-            <span class="brand-mark">r</span>
-            <span class="brand-name">rab</span>
-          </div>
           <div class="history-controls">
             <button
               class="icon-button"
@@ -172,7 +181,12 @@ function App() {
               class="icon-button"
               type="button"
               aria-label="Reload"
-              onClick={() => send({ type: "reload" })}
+              disabled={isNewTabUrl(currentTab()?.url ?? "")}
+              onClick={() => {
+                if (!isNewTabUrl(currentTab()?.url ?? "")) {
+                  send({ type: "reload" });
+                }
+              }}
             >
               <Reload />
             </button>
@@ -203,8 +217,18 @@ function App() {
                   type="button"
                   onClick={() => send({ type: "select_tab", id: tab.id })}
                 >
-                  <span class="tab-favicon">
-                    {displayTitle(tab).slice(0, 1).toUpperCase()}
+                  <span
+                    class="tab-favicon"
+                    classList={{ "has-image": Boolean(tab.faviconUrl) }}
+                  >
+                    <Show
+                      when={tab.faviconUrl}
+                      fallback={displayTitle(tab).slice(0, 1).toUpperCase()}
+                    >
+                      {(faviconUrl) => (
+                        <img src={faviconUrl()} alt="" aria-hidden="true" />
+                      )}
+                    </Show>
                   </span>
                   <span class="tab-copy">
                     <span class="tab-title">{displayTitle(tab)}</span>
@@ -246,11 +270,6 @@ function App() {
           <span>New tab</span>
           <kbd>{shortcutLabel("T")}</kbd>
         </button>
-
-        <footer>
-          <span class="status-dot" />
-          <span>Local session</span>
-        </footer>
       </div>
 
       <Show when={locationOpen()}>
@@ -267,17 +286,41 @@ function App() {
             onClick={(event) => event.stopPropagation()}
           >
             <label id="location-label" for="location">Navigate</label>
-            <div class="command-input-wrap">
+            <div
+              class="command-input-wrap"
+              classList={{ "search-mode": searchMode() }}
+            >
               <Search />
+              <Show when={searchMode()}>
+                <span class="search-provider">Google</span>
+              </Show>
               <input
                 ref={locationInput}
                 id="location"
-                value={locationValue()}
-                onInput={(event) => setLocationValue(event.currentTarget.value)}
+                value={displayedLocationValue()}
+                onInput={(event) =>
+                  setLocationValue(
+                    searchMode()
+                      ? `?${event.currentTarget.value}`
+                      : event.currentTarget.value,
+                  )
+                }
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Backspace" &&
+                    searchMode() &&
+                    displayedLocationValue() === ""
+                  ) {
+                    event.preventDefault();
+                    setLocationValue("");
+                  }
+                }}
                 autocomplete="off"
                 autocapitalize="off"
                 spellcheck={false}
-                placeholder="URL or domain"
+                placeholder={
+                  searchMode() ? "ウェブを検索します" : "URL or domain"
+                }
               />
             </div>
             <div class="command-hint">
