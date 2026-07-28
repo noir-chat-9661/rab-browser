@@ -75,6 +75,15 @@ impl BookmarkManager {
         }
     }
 
+    /// Removes a bookmark by URL. Returns `true` if it existed.
+    pub fn remove(&mut self, url: &str) -> bool {
+        let Some(index) = self.bookmarks.iter().position(|bookmark| bookmark.url == url) else {
+            return false;
+        };
+        self.bookmarks.remove(index);
+        true
+    }
+
     pub fn contains(&self, url: &str) -> bool {
         self.bookmarks.iter().any(|bookmark| bookmark.url == url)
     }

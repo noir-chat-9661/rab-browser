@@ -328,6 +328,25 @@ function App() {
                       </span>
                       <span class="bookmark-url">{bookmark.url}</span>
                     </span>
+                    <span
+                      class="bookmark-remove"
+                      role="button"
+                      tabindex="0"
+                      aria-label={`Remove bookmark ${displayBookmarkTitle(bookmark)}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        send({ type: "remove_bookmark", url: bookmark.url });
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          send({ type: "remove_bookmark", url: bookmark.url });
+                        }
+                      }}
+                    >
+                      <Close />
+                    </span>
                   </button>
                 )}
               </For>

@@ -64,6 +64,7 @@ enum ChromeCommand {
     ToggleSidebar,
     ToggleBookmark,
     SelectBookmark { url: String },
+    RemoveBookmark { url: String },
     FaviconChanged { url: String },
     OpenDevtools,
     OpenMcpHelp,
@@ -415,12 +416,36 @@ fn install_app_menu(
     )
     .expect("failed to build the application menu");
 
+    // Without a standard Edit menu, macOS won't route Cmd+C/V/X/Z/A key
+    // equivalents to the focused WKWebView the way HIG-compliant apps expect.
+    let undo = PredefinedMenuItem::undo(None);
+    let redo = PredefinedMenuItem::redo(None);
+    let edit_separator = PredefinedMenuItem::separator();
+    let cut = PredefinedMenuItem::cut(None);
+    let copy = PredefinedMenuItem::copy(None);
+    let paste = PredefinedMenuItem::paste(None);
+    let select_all = PredefinedMenuItem::select_all(None);
+    let edit_menu = Submenu::with_items(
+        "Edit",
+        true,
+        &[
+            &undo,
+            &redo,
+            &edit_separator,
+            &cut,
+            &copy,
+            &paste,
+            &select_all,
+        ],
+    )
+    .expect("failed to build the Edit menu");
+
     let mcp_help = MenuItem::with_id("rab-browser.mcp-help", "MCPの使い方", true, None);
     let settings = MenuItem::with_id("rab-browser.settings", "設定", true, None);
     let help_menu = Submenu::with_items("Help", true, &[&mcp_help, &settings])
         .expect("failed to build the Help menu");
-    let menu =
-        Menu::with_items(&[&application_menu, &help_menu]).expect("failed to build the menu bar");
+    let menu = Menu::with_items(&[&application_menu, &edit_menu, &help_menu])
+        .expect("failed to build the menu bar");
 
     let mcp_help_id = mcp_help.id().clone();
     let settings_id = settings.id().clone();
@@ -1161,6 +1186,9 @@ fn main() -> wry::Result<()> {
                                     tab.favicon_url = None;
                                 }
                             }
+                        }
+                        ChromeCommand::RemoveBookmark { url } => {
+                            bookmarks.remove(&url);
                         }
                         ChromeCommand::FaviconChanged { url } => {
                             if let Some(tab) = tabs.current_tab_mut() {

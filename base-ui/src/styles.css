@@ -340,7 +340,7 @@ kbd {
 
 .bookmark {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-columns: 24px minmax(0, 1fr) 20px;
   align-items: center;
   width: 100%;
   min-height: 42px;
@@ -351,6 +351,30 @@ kbd {
   border: 1px solid transparent;
   border-radius: 4px;
   text-align: left;
+}
+
+.bookmark-remove {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  color: #73776d;
+  border-radius: 3px;
+  opacity: 0;
+}
+
+.bookmark:hover .bookmark-remove {
+  opacity: 1;
+}
+
+.bookmark-remove:hover {
+  color: #f4f5ee;
+  background: #3b3e37;
+}
+
+.bookmark-remove svg {
+  width: 13px;
+  height: 13px;
 }
 
 .bookmark:hover {
