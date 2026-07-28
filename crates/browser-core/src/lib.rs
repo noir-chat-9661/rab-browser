@@ -36,6 +36,54 @@ impl Tab {
     }
 }
 
+/// A bookmark kept for the lifetime of the browser process.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Bookmark {
+    pub url: String,
+    pub title: String,
+}
+
+/// Owns the in-memory bookmark list.
+#[derive(Debug, Default)]
+pub struct BookmarkManager {
+    bookmarks: Vec<Bookmark>,
+}
+
+impl BookmarkManager {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds a bookmark for a new URL or removes the existing bookmark.
+    ///
+    /// Returns `true` when the bookmark was added and `false` when it was removed.
+    pub fn toggle(&mut self, url: impl Into<String>, title: impl Into<String>) -> bool {
+        let url = url.into();
+        if let Some(index) = self
+            .bookmarks
+            .iter()
+            .position(|bookmark| bookmark.url == url)
+        {
+            self.bookmarks.remove(index);
+            false
+        } else {
+            self.bookmarks.push(Bookmark {
+                url,
+                title: title.into(),
+            });
+            true
+        }
+    }
+
+    pub fn contains(&self, url: &str) -> bool {
+        self.bookmarks.iter().any(|bookmark| bookmark.url == url)
+    }
+
+    pub fn bookmarks(&self) -> impl Iterator<Item = &Bookmark> {
+        self.bookmarks.iter()
+    }
+}
+
 /// The small engine surface needed by the first browser shell.
 pub trait BrowserEngine {
     fn navigate(&mut self, url: &str) -> Result<(), BrowserError>;
@@ -146,5 +194,24 @@ mod tests {
         assert_eq!(manager.current_tab().unwrap().url, "https://example.com");
         manager.remove_tab(first);
         assert_eq!(manager.current_id(), Some(second));
+    }
+
+    #[test]
+    fn toggles_bookmarks_by_url() {
+        let mut bookmarks = BookmarkManager::new();
+
+        assert!(bookmarks.toggle("https://example.com", "Example"));
+        assert!(bookmarks.contains("https://example.com"));
+        assert_eq!(
+            bookmarks.bookmarks().collect::<Vec<_>>(),
+            vec![&Bookmark {
+                url: "https://example.com".to_owned(),
+                title: "Example".to_owned(),
+            }]
+        );
+
+        assert!(!bookmarks.toggle("https://example.com", "Updated title"));
+        assert!(!bookmarks.contains("https://example.com"));
+        assert_eq!(bookmarks.bookmarks().count(), 0);
     }
 }

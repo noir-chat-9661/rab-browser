@@ -7,9 +7,11 @@ use std::{
     },
 };
 
-use browser_core::{BrowserEngine, TabId, TabManager};
+use browser_core::{BookmarkManager, BrowserEngine, TabId, TabManager};
 use browser_engine_wry::WryEngine;
 use browser_mcp_server::{DispatchError, McpRequest, RequestDispatcher, TabInfo};
+#[cfg(target_os = "macos")]
+use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 #[cfg(target_os = "macos")]
 use objc2::{rc::Retained, runtime::AnyObject};
 #[cfg(target_os = "macos")]
@@ -25,6 +27,7 @@ use tao::{
 use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder, http::Request};
 
 const SIDEBAR_WIDTH: f64 = 264.0;
+const MCP_SKILL: &str = include_str!("../../../skills/rab-browser-mcp/SKILL.md");
 const NEW_TAB_URL: &str = concat!(
     "data:text/html;charset=utf-8,",
     "%3C!doctype%20html%3E%3Chtml%20lang=%22ja%22%3E%3Chead%3E",
@@ -59,8 +62,12 @@ enum ChromeCommand {
     GoForward,
     Reload,
     ToggleSidebar,
+    ToggleBookmark,
+    SelectBookmark { url: String },
     FaviconChanged { url: String },
     OpenDevtools,
+    OpenMcpHelp,
+    OpenSettings,
     PaletteOpened,
     PaletteClosed,
 }
@@ -78,6 +85,7 @@ struct ChromeState<'a> {
     r#type: &'static str,
     tabs: Vec<ChromeTab<'a>>,
     current_tab_id: Option<u64>,
+    bookmarks: Vec<ChromeBookmark<'a>>,
 }
 
 #[derive(Serialize)]
@@ -89,6 +97,13 @@ struct ChromeTab<'a> {
     favicon_url: Option<&'a str>,
     can_go_back: bool,
     can_go_forward: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChromeBookmark<'a> {
+    url: &'a str,
+    title: &'a str,
 }
 
 #[derive(Debug)]
@@ -207,6 +222,61 @@ fn chrome_html() -> String {
     })
 }
 
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn internal_page_url(title: &str, content: &str) -> String {
+    let html = format!(
+        "<!doctype html><html lang=\"ja\"><head><meta charset=\"utf-8\">\
+         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+         <title>{}</title><style>\
+         :root{{color-scheme:dark;font-family:\"Avenir Next\",Avenir,\"Helvetica Neue\",sans-serif}}\
+         body{{margin:0;padding:48px;background:#171816;color:#e9e9e3}}\
+         main{{max-width:880px;margin:0 auto}}\
+         h1{{margin:0 0 12px;color:#d6ff72;font-size:24px}}\
+         p{{color:#a2a59d;line-height:1.7}}\
+         pre{{overflow:auto;padding:20px;color:#d8dad2;background:#1e201d;\
+         border:1px solid #343630;border-radius:4px;font:12px/1.7 \"SFMono-Regular\",Consolas,monospace;\
+         white-space:pre-wrap;word-break:break-word}}\
+         code{{color:#d6ff72}}\
+         .status{{display:inline-flex;padding:6px 10px;color:#171816;background:#d6ff72;\
+         border-radius:3px;font-weight:700}}\
+         </style></head><body><main><h1>{}</h1>{}</main></body></html>",
+        escape_html(title),
+        escape_html(title),
+        content
+    );
+    let encoded = url::form_urlencoded::byte_serialize(html.as_bytes()).collect::<String>();
+    format!(
+        "data:text/html;charset=utf-8,{}",
+        encoded.replace('+', "%20")
+    )
+}
+
+fn mcp_help_url() -> String {
+    internal_page_url(
+        "MCPの使い方",
+        &format!("<pre>{}</pre>", escape_html(MCP_SKILL)),
+    )
+}
+
+fn settings_url(mcp_enabled: bool) -> String {
+    let status = if mcp_enabled { "有効" } else { "無効" };
+    internal_page_url(
+        "設定",
+        &format!(
+            "<p>現在の起動状態</p><p class=\"status\">MCP: {status}</p>\
+             <p><code>--mcp</code> または <code>RAB_MCP=1</code> で起動時に有効化できます。</p>"
+        ),
+    )
+}
+
 fn normalize_url(value: &str) -> String {
     let value = value.trim();
     if value.is_empty() {
@@ -318,6 +388,60 @@ fn install_close_tab_shortcut_monitor(
     unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &handler) }
 }
 
+#[cfg(target_os = "macos")]
+fn install_app_menu(
+    commands_tx: Sender<String>,
+    event_loop_proxy: EventLoopProxy<McpRequest>,
+) -> Menu {
+    let about = PredefinedMenuItem::about(Some("rab-browser について"), None);
+    let app_separator = PredefinedMenuItem::separator();
+    let hide = PredefinedMenuItem::hide(None);
+    let hide_others = PredefinedMenuItem::hide_others(None);
+    let show_all = PredefinedMenuItem::show_all(None);
+    let quit_separator = PredefinedMenuItem::separator();
+    let quit = PredefinedMenuItem::quit(None);
+    let application_menu = Submenu::with_items(
+        "rab-browser",
+        true,
+        &[
+            &about,
+            &app_separator,
+            &hide,
+            &hide_others,
+            &show_all,
+            &quit_separator,
+            &quit,
+        ],
+    )
+    .expect("failed to build the application menu");
+
+    let mcp_help = MenuItem::with_id("rab-browser.mcp-help", "MCPの使い方", true, None);
+    let settings = MenuItem::with_id("rab-browser.settings", "設定", true, None);
+    let help_menu = Submenu::with_items("Help", true, &[&mcp_help, &settings])
+        .expect("failed to build the Help menu");
+    let menu =
+        Menu::with_items(&[&application_menu, &help_menu]).expect("failed to build the menu bar");
+
+    let mcp_help_id = mcp_help.id().clone();
+    let settings_id = settings.id().clone();
+    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+        let command = if event.id == mcp_help_id {
+            Some(r#"{"type":"open_mcp_help"}"#)
+        } else if event.id == settings_id {
+            Some(r#"{"type":"open_settings"}"#)
+        } else {
+            None
+        };
+        if let Some(command) = command
+            && commands_tx.send(command.to_owned()).is_ok()
+        {
+            let _ = event_loop_proxy.send_event(McpRequest::Wake);
+        }
+    }));
+    menu.init_for_nsapp();
+    menu
+}
+
 fn resolve_tab_id(tabs: &TabManager, raw_id: u64) -> Option<TabId> {
     tabs.tabs()
         .find(|tab| tab.id.get() == raw_id)
@@ -410,7 +534,7 @@ fn update_history_flags(tabs: &mut TabManager, histories: &BTreeMap<TabId, TabHi
     }
 }
 
-fn send_state(chrome: &WebView, tabs: &TabManager) {
+fn send_state(chrome: &WebView, tabs: &TabManager, bookmarks: &BookmarkManager) {
     let state = ChromeState {
         r#type: "state",
         tabs: tabs
@@ -425,6 +549,13 @@ fn send_state(chrome: &WebView, tabs: &TabManager) {
             })
             .collect(),
         current_tab_id: tabs.current_id().map(TabId::get),
+        bookmarks: bookmarks
+            .bookmarks()
+            .map(|bookmark| ChromeBookmark {
+                url: &bookmark.url,
+                title: &bookmark.title,
+            })
+            .collect(),
     };
     if let Ok(json) = serde_json::to_string(&state) {
         let _ = chrome.evaluate_script(&format!("window.rabChrome?.receive({json});"));
@@ -597,6 +728,7 @@ fn handle_mcp_request(
     window: &Window,
     chrome: &WebView,
     tabs: &mut TabManager,
+    bookmarks: &BookmarkManager,
     views: &mut BTreeMap<TabId, WryEngine>,
     histories: &mut BTreeMap<TabId, TabHistory>,
     content_events_tx: &Sender<ContentEvent>,
@@ -631,7 +763,7 @@ fn handle_mcp_request(
             ) {
                 Ok(id) => {
                     bring_chrome_to_front(chrome);
-                    send_state(chrome, tabs);
+                    send_state(chrome, tabs, bookmarks);
                     let _ = reply.send(id.get());
                 }
                 Err(error) => {
@@ -658,7 +790,7 @@ fn handle_mcp_request(
             if result == CloseTabResult::CreatedReplacement {
                 bring_chrome_to_front(chrome);
             }
-            send_state(chrome, tabs);
+            send_state(chrome, tabs, bookmarks);
             let _ = reply.send(result != CloseTabResult::Ignored);
         }
         McpRequest::SelectTab { id, reply } => {
@@ -667,7 +799,7 @@ fn handle_mcp_request(
                 true
             });
             if selected {
-                send_state(chrome, tabs);
+                send_state(chrome, tabs, bookmarks);
             }
             let _ = reply.send(selected);
         }
@@ -686,7 +818,7 @@ fn handle_mcp_request(
                     tab.url = url;
                     tab.favicon_url = None;
                 }
-                send_state(chrome, tabs);
+                send_state(chrome, tabs, bookmarks);
             }
             let _ = reply.send(result);
         }
@@ -698,7 +830,7 @@ fn handle_mcp_request(
                         let _ = view.go_back();
                     }
                     update_history_flags(tabs, histories, id);
-                    send_state(chrome, tabs);
+                    send_state(chrome, tabs, bookmarks);
                 }
                 moved
             });
@@ -712,7 +844,7 @@ fn handle_mcp_request(
                         let _ = view.go_forward();
                     }
                     update_history_flags(tabs, histories, id);
-                    send_state(chrome, tabs);
+                    send_state(chrome, tabs, bookmarks);
                 }
                 moved
             });
@@ -788,10 +920,13 @@ fn main() -> wry::Result<()> {
     let (content_events_tx, content_events_rx) = mpsc::channel::<ContentEvent>();
     let (commands_tx, commands_rx) = mpsc::channel::<String>();
     #[cfg(target_os = "macos")]
+    let app_menu = install_app_menu(commands_tx.clone(), event_loop.create_proxy());
+    #[cfg(target_os = "macos")]
     let close_tab_shortcut_monitor =
         install_close_tab_shortcut_monitor(commands_tx.clone(), event_loop.create_proxy())
             .expect("failed to install the macOS Cmd+W event monitor");
     let mut tabs = TabManager::new();
+    let mut bookmarks = BookmarkManager::new();
     let mut views = BTreeMap::new();
     let mut histories = BTreeMap::new();
     let mut sidebar_visible = true;
@@ -829,6 +964,8 @@ fn main() -> wry::Result<()> {
         // Keep the monitor token with the event loop so its registration has the
         // same explicit lifetime as the AppKit application.
         let _keep_close_tab_shortcut_monitor_alive = &close_tab_shortcut_monitor;
+        #[cfg(target_os = "macos")]
+        let _keep_app_menu_alive = &app_menu;
 
         *control_flow = ControlFlow::Wait;
         match event {
@@ -837,6 +974,7 @@ fn main() -> wry::Result<()> {
                 &window,
                 &chrome,
                 &mut tabs,
+                &bookmarks,
                 &mut views,
                 &mut histories,
                 &content_events_tx,
@@ -867,7 +1005,7 @@ fn main() -> wry::Result<()> {
                             }
                         }
                     }
-                    send_state(&chrome, &tabs);
+                    send_state(&chrome, &tabs, &bookmarks);
                 }
 
                 for raw_command in commands_rx.try_iter() {
@@ -895,7 +1033,7 @@ fn main() -> wry::Result<()> {
                             .is_ok()
                             {
                                 bring_chrome_to_front(&chrome);
-                                send_state(&chrome, &tabs);
+                                send_state(&chrome, &tabs, &bookmarks);
                                 focus_location(&window, &chrome, &mut palette_open);
                             }
                         }
@@ -1000,6 +1138,30 @@ fn main() -> wry::Result<()> {
                                 let _ = view.focus();
                             }
                         }
+                        ChromeCommand::ToggleBookmark => {
+                            if let Some(tab) =
+                                tabs.current_tab().filter(|tab| !is_new_tab_url(&tab.url))
+                            {
+                                let title = if tab.title.trim().is_empty() {
+                                    tab.url.clone()
+                                } else {
+                                    tab.title.clone()
+                                };
+                                bookmarks.toggle(tab.url.clone(), title);
+                            }
+                        }
+                        ChromeCommand::SelectBookmark { url } => {
+                            if let Some(id) = tabs.current_id() {
+                                let url = normalize_url(&url);
+                                if let Some(view) = views.get_mut(&id)
+                                    && view.navigate(&url).is_ok()
+                                    && let Some(tab) = tabs.tab_mut(id)
+                                {
+                                    tab.url = url;
+                                    tab.favicon_url = None;
+                                }
+                            }
+                        }
                         ChromeCommand::FaviconChanged { url } => {
                             if let Some(tab) = tabs.current_tab_mut() {
                                 tab.favicon_url = (!url.is_empty()).then_some(url);
@@ -1008,6 +1170,38 @@ fn main() -> wry::Result<()> {
                         ChromeCommand::OpenDevtools => {
                             if let Some(view) = tabs.current_id().and_then(|id| views.get(&id)) {
                                 view.open_devtools();
+                            }
+                        }
+                        ChromeCommand::OpenMcpHelp => {
+                            if add_tab(
+                                &window,
+                                &mut tabs,
+                                &mut views,
+                                &mut histories,
+                                &content_events_tx,
+                                &commands_tx,
+                                &mcp_help_url(),
+                                sidebar_visible,
+                            )
+                            .is_ok()
+                            {
+                                bring_chrome_to_front(&chrome);
+                            }
+                        }
+                        ChromeCommand::OpenSettings => {
+                            if add_tab(
+                                &window,
+                                &mut tabs,
+                                &mut views,
+                                &mut histories,
+                                &content_events_tx,
+                                &commands_tx,
+                                &settings_url(mcp_enabled),
+                                sidebar_visible,
+                            )
+                            .is_ok()
+                            {
+                                bring_chrome_to_front(&chrome);
                             }
                         }
                         ChromeCommand::PaletteOpened => {
@@ -1024,7 +1218,7 @@ fn main() -> wry::Result<()> {
                             }
                         }
                     }
-                    send_state(&chrome, &tabs);
+                    send_state(&chrome, &tabs, &bookmarks);
                 }
             }
             Event::WindowEvent { event, .. } => match event {
@@ -1053,7 +1247,7 @@ fn main() -> wry::Result<()> {
                             )
                             .is_ok() =>
                         {
-                            send_state(&chrome, &tabs);
+                            send_state(&chrome, &tabs, &bookmarks);
                             bring_chrome_to_front(&chrome);
                             focus_location(&window, &chrome, &mut palette_open);
                         }
@@ -1099,7 +1293,7 @@ fn main() -> wry::Result<()> {
                                 if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
                                 }
-                                send_state(&chrome, &tabs);
+                                send_state(&chrome, &tabs, &bookmarks);
                             }
                         }
                         KeyCode::KeyI if modifiers.alt_key() => {

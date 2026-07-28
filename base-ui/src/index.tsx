@@ -11,10 +11,16 @@ type Tab = {
   canGoForward: boolean;
 };
 
+type Bookmark = {
+  url: string;
+  title: string;
+};
+
 type BrowserState = {
   type: "state";
   tabs: Tab[];
   currentTabId: number | null;
+  bookmarks: Bookmark[];
 };
 
 type ChromeApi = {
@@ -33,6 +39,7 @@ const emptyState: BrowserState = {
   type: "state",
   tabs: [],
   currentTabId: null,
+  bookmarks: [],
 };
 
 function send(message: Record<string, unknown>) {
@@ -73,6 +80,15 @@ function displayTitle(tab: Tab) {
   }
 }
 
+function displayBookmarkTitle(bookmark: Bookmark) {
+  if (bookmark.title.trim()) return bookmark.title;
+  try {
+    return new URL(bookmark.url).hostname.replace(/^www\./, "") || bookmark.url;
+  } catch {
+    return bookmark.url;
+  }
+}
+
 function App() {
   const [state, setState] = createSignal(emptyState);
   const [locationOpen, setLocationOpen] = createSignal(false);
@@ -82,6 +98,10 @@ function App() {
   const currentTab = createMemo(() =>
     state().tabs.find((tab) => tab.id === state().currentTabId),
   );
+  const currentTabBookmarked = createMemo(() => {
+    const url = currentTab()?.url;
+    return Boolean(url && state().bookmarks.some((bookmark) => bookmark.url === url));
+  });
   const searchMode = createMemo(() => locationValue().startsWith("?"));
   const displayedLocationValue = createMemo(() =>
     searchMode() ? locationValue().slice(1) : locationValue(),
@@ -196,15 +216,32 @@ function App() {
           </div>
         </header>
 
-        <button class="location-trigger" type="button" onClick={openLocation}>
-          <Search />
-          <span>
-            {isNewTabUrl(currentTab()?.url ?? "")
-              ? "Go to a URL"
-              : currentTab()?.url}
-          </span>
-          <kbd>{shortcutLabel("L")}</kbd>
-        </button>
+        <div class="location-row">
+          <button class="location-trigger" type="button" onClick={openLocation}>
+            <Search />
+            <span>
+              {isNewTabUrl(currentTab()?.url ?? "")
+                ? "Go to a URL"
+                : currentTab()?.url}
+            </span>
+            <kbd>{shortcutLabel("L")}</kbd>
+          </button>
+          <button
+            class="bookmark-toggle"
+            classList={{ active: currentTabBookmarked() }}
+            type="button"
+            aria-label={
+              currentTabBookmarked()
+                ? "Remove current page from bookmarks"
+                : "Bookmark current page"
+            }
+            aria-pressed={currentTabBookmarked()}
+            disabled={isNewTabUrl(currentTab()?.url ?? "")}
+            onClick={() => send({ type: "toggle_bookmark" })}
+          >
+            <Star />
+          </button>
+        </div>
 
         <section class="tabs-section" aria-label="Open tabs">
           <div class="section-label">
@@ -262,6 +299,40 @@ function App() {
               )}
             </For>
           </div>
+        </section>
+
+        <section class="bookmarks-section" aria-label="Bookmarks">
+          <div class="section-label">
+            <span>Bookmarks</span>
+            <span>{state().bookmarks.length.toString().padStart(2, "0")}</span>
+          </div>
+          <Show
+            when={state().bookmarks.length > 0}
+            fallback={<p class="bookmarks-empty">Star a page to keep it here.</p>}
+          >
+            <div class="bookmark-list">
+              <For each={state().bookmarks}>
+                {(bookmark) => (
+                  <button
+                    class="bookmark"
+                    type="button"
+                    title={bookmark.url}
+                    onClick={() =>
+                      send({ type: "select_bookmark", url: bookmark.url })
+                    }
+                  >
+                    <span class="bookmark-mark"><Star /></span>
+                    <span class="bookmark-copy">
+                      <span class="bookmark-title">
+                        {displayBookmarkTitle(bookmark)}
+                      </span>
+                      <span class="bookmark-url">{bookmark.url}</span>
+                    </span>
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
         </section>
 
         <button
@@ -359,6 +430,14 @@ function Plus() {
 
 function Close() {
   return <svg viewBox="0 0 20 20"><path d="m6 6 8 8m0-8-8 8" /></svg>;
+}
+
+function Star() {
+  return (
+    <svg viewBox="0 0 20 20">
+      <path d="m10 3 2.1 4.3 4.7.7-3.4 3.3.8 4.7-4.2-2.2L5.8 16l.8-4.7L3.2 8l4.7-.7L10 3Z" />
+    </svg>
+  );
 }
 
 render(() => <App />, document.getElementById("root")!);
