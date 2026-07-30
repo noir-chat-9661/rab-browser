@@ -24,18 +24,15 @@ use tao::{
     keyboard::{KeyCode, ModifiersState},
     window::{Window, WindowBuilder},
 };
-use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder, http::Request};
+use wry::{
+    PageLoadEvent, Rect, WebView, WebViewBuilder,
+    http::{Request, Response, header::CONTENT_TYPE},
+};
 
 const SIDEBAR_WIDTH: f64 = 264.0;
 const MCP_SKILL: &str = include_str!("../../../skills/rab-browser-mcp/SKILL.md");
-const NEW_TAB_URL: &str = concat!(
-    "data:text/html;charset=utf-8,",
-    "%3C!doctype%20html%3E%3Chtml%20lang=%22ja%22%3E%3Chead%3E",
-    "%3Cmeta%20charset=%22utf-8%22%3E%3Ctitle%3E%E6%96%B0%E3%81%97%E3%81%84%E3%82%BF%E3%83%96%3C/title%3E",
-    "%3Cstyle%3Ehtml%2Cbody%7Bheight%3A100%25%7Dbody%7Bmargin%3A0%3Bdisplay%3Agrid%3Bplace-items%3Acenter%3B",
-    "background%3A%23171816%3Bcolor%3A%23a2a59d%3Bfont%3A14px%20system-ui%2Csans-serif%7D%3C/style%3E",
-    "%3C/head%3E%3Cbody%3E%E6%96%B0%E3%81%97%E3%81%84%E3%82%BF%E3%83%96%3C/body%3E%3C/html%3E"
-);
+const INTERNAL_PROTOCOL: &str = "rab";
+const NEW_TAB_URL: &str = "rab://newtab/";
 
 struct ProxyDispatcher(EventLoopProxy<McpRequest>);
 
@@ -232,8 +229,12 @@ fn escape_html(value: &str) -> String {
         .replace('\'', "&#39;")
 }
 
-fn internal_page_url(title: &str, content: &str) -> String {
-    let html = format!(
+fn internal_page_url(page: &str) -> String {
+    format!("{INTERNAL_PROTOCOL}://{page}/")
+}
+
+fn internal_page_html(title: &str, content: &str) -> String {
+    format!(
         "<!doctype html><html lang=\"ja\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
          <title>{}</title><style>\
@@ -252,30 +253,63 @@ fn internal_page_url(title: &str, content: &str) -> String {
         escape_html(title),
         escape_html(title),
         content
-    );
-    let encoded = url::form_urlencoded::byte_serialize(html.as_bytes()).collect::<String>();
-    format!(
-        "data:text/html;charset=utf-8,{}",
-        encoded.replace('+', "%20")
     )
 }
 
 fn mcp_help_url() -> String {
-    internal_page_url(
-        "MCPの使い方",
-        &format!("<pre>{}</pre>", escape_html(MCP_SKILL)),
-    )
+    internal_page_url("help")
 }
 
 fn settings_url(mcp_enabled: bool) -> String {
-    let status = if mcp_enabled { "有効" } else { "無効" };
-    internal_page_url(
-        "設定",
-        &format!(
-            "<p>現在の起動状態</p><p class=\"status\">MCP: {status}</p>\
-             <p><code>--mcp</code> または <code>RAB_MCP=1</code> で起動時に有効化できます。</p>"
-        ),
+    format!(
+        "{}?mcp={}",
+        internal_page_url("settings"),
+        u8::from(mcp_enabled)
     )
+}
+
+fn internal_page_response(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
+    let uri = request.uri();
+    let html = match (uri.host(), uri.path()) {
+        (Some("newtab"), "/") => concat!(
+            "<!doctype html><html lang=\"ja\"><head><meta charset=\"utf-8\">",
+            "<title>新しいタブ</title>",
+            "<style>html,body{height:100%}body{margin:0;display:grid;place-items:center;",
+            "background:#171816;color:#a2a59d;font:14px system-ui,sans-serif}</style>",
+            "</head><body>新しいタブ</body></html>"
+        )
+        .to_owned(),
+        (Some("help"), "/") => internal_page_html(
+            "MCPの使い方",
+            &format!("<pre>{}</pre>", escape_html(MCP_SKILL)),
+        ),
+        (Some("settings"), "/") => {
+            let mcp_enabled = uri.query().is_some_and(|query| {
+                url::form_urlencoded::parse(query.as_bytes())
+                    .any(|(key, value)| key == "mcp" && value == "1")
+            });
+            let status = if mcp_enabled { "有効" } else { "無効" };
+            internal_page_html(
+                "設定",
+                &format!(
+                    "<p>現在の起動状態</p><p class=\"status\">MCP: {status}</p>\
+                     <p><code>--mcp</code> または <code>RAB_MCP=1</code> で起動時に有効化できます。</p>"
+                ),
+            )
+        }
+        _ => {
+            return Response::builder()
+                .status(404)
+                .header(CONTENT_TYPE, "text/plain; charset=utf-8")
+                .body(b"Not Found".to_vec())
+                .expect("valid internal-page 404 response");
+        }
+    };
+
+    Response::builder()
+        .header(CONTENT_TYPE, "text/html; charset=utf-8")
+        .body(html.into_bytes())
+        .expect("valid internal-page response")
 }
 
 fn normalize_url(value: &str) -> String {
@@ -486,7 +520,7 @@ fn create_content_view(
     let favicon_tx = events_tx.clone();
     let content_commands_tx = commands_tx.clone();
     let bounds = content_bounds(window, sidebar_visible);
-    let view = WryEngine::new_with_handlers_and_bounds(
+    let view = WryEngine::new_with_handlers_and_bounds_and_protocol(
         window,
         url,
         Some(bounds),
@@ -508,6 +542,8 @@ fn create_content_view(
                 let _ = content_commands_tx.send(body);
             }
         },
+        INTERNAL_PROTOCOL,
+        internal_page_response,
     )?;
     // Keep this as a post-build correction too: the window scale or size may
     // have changed while WKWebView was being initialized.
@@ -1344,9 +1380,15 @@ fn main() -> wry::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        NEW_TAB_URL, TabHistory, eval_result, is_only_new_tab, normalize_url, parse_startup_args,
+        NEW_TAB_URL, TabHistory, eval_result, internal_page_response, is_only_new_tab,
+        mcp_help_url, normalize_url, parse_startup_args, settings_url,
     };
     use browser_core::TabManager;
+    use wry::http::{Request, StatusCode, header::CONTENT_TYPE};
+
+    fn request_internal_page(url: &str) -> wry::http::Response<Vec<u8>> {
+        internal_page_response(Request::builder().uri(url).body(Vec::new()).unwrap())
+    }
 
     #[test]
     fn normalizes_urls_and_search_queries() {
@@ -1383,6 +1425,34 @@ mod tests {
             parse_startup_args(["--mcp".to_owned(), "https://example.org".to_owned()]);
         assert!(enabled);
         assert_eq!(url, "https://example.org");
+    }
+
+    #[test]
+    fn serves_all_internal_pages_through_the_rab_protocol() {
+        let cases = [
+            (NEW_TAB_URL.to_owned(), "新しいタブ"),
+            (mcp_help_url(), "MCPの使い方"),
+            (settings_url(false), "MCP: 無効"),
+            (settings_url(true), "MCP: 有効"),
+        ];
+
+        for (url, expected_text) in cases {
+            let response = request_internal_page(&url);
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[CONTENT_TYPE], "text/html; charset=utf-8");
+            assert!(
+                String::from_utf8(response.into_body())
+                    .unwrap()
+                    .contains(expected_text)
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_internal_pages() {
+        let response = request_internal_page("rab://unknown/");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]
