@@ -1,8 +1,13 @@
 //! wry-backed implementation of the browser engine.
 
+use std::borrow::Cow;
+
 use browser_core::{BrowserEngine, BrowserError};
 use tao::window::Window;
-use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder, http::Request};
+use wry::{
+    PageLoadEvent, Rect, WebView, WebViewBuilder,
+    http::{Request, Response},
+};
 
 /// WKWebView's default UA string doesn't match a released Safari version, so
 /// some sites (e.g. Google Search) serve stale/legacy markup. Present as a
@@ -18,11 +23,7 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
   const hasPrimaryModifier = (event) => isMac ? event.metaKey : event.ctrlKey;
   const hasSecondaryPrimaryModifier = (event) =>
     isMac ? event.ctrlKey : event.metaKey;
-  // Must match crates/browser-app/src/main.rs's NEW_TAB_URL exactly (not a
-  // prefix match) so an arbitrary data:text/html page isn't mistaken for
-  // the new-tab placeholder.
-  const NEW_TAB_URL =
-    "data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%20lang=%22ja%22%3E%3Chead%3E%3Cmeta%20charset=%22utf-8%22%3E%3Ctitle%3E%E6%96%B0%E3%81%97%E3%81%84%E3%82%BF%E3%83%96%3C/title%3E%3Cstyle%3Ehtml%2Cbody%7Bheight%3A100%25%7Dbody%7Bmargin%3A0%3Bdisplay%3Agrid%3Bplace-items%3Acenter%3Bbackground%3A%23171816%3Bcolor%3A%23a2a59d%3Bfont%3A14px%20system-ui%2Csans-serif%7D%3C/style%3E%3C/head%3E%3Cbody%3E%E6%96%B0%E3%81%97%E3%81%84%E3%82%BF%E3%83%96%3C/body%3E%3C/html%3E";
+  const NEW_TAB_URL = "rab://newtab/";
   const isNewTabUrl = (url) => url === "about:blank" || url === NEW_TAB_URL;
   const postMessage = (message) => {
     window.ipc.postMessage(JSON.stringify(message));
@@ -112,6 +113,8 @@ pub struct WryEngine {
     webview: WebView,
 }
 
+type CustomProtocolHandler = Box<dyn Fn(Request<Vec<u8>>) -> Response<Vec<u8>>>;
+
 impl WryEngine {
     pub fn new(window: &Window, url: &str) -> Result<Self, wry::Error> {
         Self::new_with_handlers(window, url, |_| {}, |_, _| {}, |_| {})
@@ -142,6 +145,49 @@ impl WryEngine {
         on_page_load: impl Fn(PageLoadEvent, String) + 'static,
         on_ipc: impl Fn(Request<String>) + 'static,
     ) -> Result<Self, wry::Error> {
+        Self::build(
+            window,
+            url,
+            bounds,
+            on_title_changed,
+            on_page_load,
+            on_ipc,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_handlers_and_bounds_and_protocol(
+        window: &Window,
+        url: &str,
+        bounds: Option<Rect>,
+        on_title_changed: impl Fn(String) + 'static,
+        on_page_load: impl Fn(PageLoadEvent, String) + 'static,
+        on_ipc: impl Fn(Request<String>) + 'static,
+        protocol_name: &str,
+        protocol_handler: impl Fn(Request<Vec<u8>>) -> Response<Vec<u8>> + 'static,
+    ) -> Result<Self, wry::Error> {
+        Self::build(
+            window,
+            url,
+            bounds,
+            on_title_changed,
+            on_page_load,
+            on_ipc,
+            Some((protocol_name.to_owned(), Box::new(protocol_handler))),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        window: &Window,
+        url: &str,
+        bounds: Option<Rect>,
+        on_title_changed: impl Fn(String) + 'static,
+        on_page_load: impl Fn(PageLoadEvent, String) + 'static,
+        on_ipc: impl Fn(Request<String>) + 'static,
+        custom_protocol: Option<(String, CustomProtocolHandler)>,
+    ) -> Result<Self, wry::Error> {
         let mut builder = WebViewBuilder::new()
             .with_initialization_script(KEYBOARD_SHORTCUT_SCRIPT)
             .with_url(url)
@@ -150,6 +196,11 @@ impl WryEngine {
             .with_document_title_changed_handler(on_title_changed)
             .with_on_page_load_handler(on_page_load)
             .with_ipc_handler(on_ipc);
+        if let Some((name, handler)) = custom_protocol {
+            builder = builder.with_custom_protocol(name, move |_webview_id, request| {
+                handler(request).map(Cow::Owned)
+            });
+        }
         if let Some(bounds) = bounds {
             builder = builder.with_bounds(bounds);
         }
