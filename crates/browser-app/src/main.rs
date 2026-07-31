@@ -8,8 +8,8 @@ use std::{
 };
 
 use browser_core::{
-    AppSettings, BookmarkManager, BrowserEngine, HistoryManager, SearchEngine, TabId, TabManager,
-    Theme,
+    AppSettings, BookmarkManager, BrowserEngine, HistoryManager, Locale, SearchEngine, TabId,
+    TabManager, Theme,
 };
 use browser_engine_wry::WryEngine;
 use browser_mcp_server::{DispatchError, McpRequest, RequestDispatcher, TabInfo};
@@ -69,6 +69,7 @@ enum ChromeCommand {
     ClearCookies,
     SetSearchEngine { engine: String },
     SetTheme { theme: String },
+    SetLocale { locale: String },
     FaviconChanged { url: String },
     OpenDevtools,
     OpenMcpHelp,
@@ -117,6 +118,7 @@ struct ChromeBookmark<'a> {
 struct ChromeSettings<'a> {
     search_engine: &'a str,
     theme: &'a str,
+    locale: &'a str,
 }
 
 #[derive(Debug)]
@@ -620,6 +622,7 @@ fn send_state(
         settings: ChromeSettings {
             search_engine: settings.search_engine.as_str(),
             theme: settings.theme.as_str(),
+            locale: settings.locale.as_str(),
         },
     };
     if let Ok(json) = serde_json::to_string(&state) {
@@ -1289,6 +1292,11 @@ fn main() -> wry::Result<()> {
                         ChromeCommand::SetTheme { theme } => {
                             if let Ok(theme) = theme.parse::<Theme>() {
                                 settings.theme = theme;
+                            }
+                        }
+                        ChromeCommand::SetLocale { locale } => {
+                            if let Ok(locale) = locale.parse::<Locale>() {
+                                settings.locale = locale;
                             }
                         }
                         // Content-originated favicon_changed messages are intercepted and

@@ -7,6 +7,7 @@ import {
   onMount,
 } from "solid-js";
 import { render } from "solid-js/web";
+import { type Locale, translations } from "./i18n";
 import "./styles.css";
 
 type Tab = {
@@ -34,6 +35,7 @@ type BrowserState = {
   settings: {
     searchEngine: SearchEngine;
     theme: Theme;
+    locale: Locale;
   };
 };
 
@@ -58,6 +60,7 @@ const emptyState: BrowserState = {
   settings: {
     searchEngine: "google",
     theme: "dark",
+    locale: "japanese",
   },
 };
 
@@ -89,13 +92,13 @@ function isNewTabUrl(url: string) {
   return url === "about:blank" || url === NEW_TAB_URL;
 }
 
-function displayTitle(tab: Tab) {
+function displayTitle(tab: Tab, newTabTitle: string) {
   if (tab.title.trim()) return tab.title;
-  if (isNewTabUrl(tab.url)) return "New Tab";
+  if (isNewTabUrl(tab.url)) return newTabTitle;
   try {
     return new URL(tab.url).hostname.replace(/^www\./, "") || tab.url;
   } catch {
-    return tab.url || "New Tab";
+    return tab.url || newTabTitle;
   }
 }
 
@@ -114,9 +117,14 @@ const searchEngines: { value: SearchEngine; label: string; detail: string }[] = 
   { value: "bing", label: "Bing", detail: "bing.com" },
 ];
 
-const themes: { value: Theme; label: string; detail: string }[] = [
-  { value: "dark", label: "Dark", detail: "Dark theme" },
-  { value: "light", label: "Light", detail: "Light theme" },
+const themes: Theme[] = [
+  "dark",
+  "light",
+];
+
+const locales: Locale[] = [
+  "japanese",
+  "english",
 ];
 
 function App() {
@@ -126,6 +134,7 @@ function App() {
   const [locationValue, setLocationValue] = createSignal("");
   let locationInput: HTMLInputElement | undefined;
   let settingsCloseButton: HTMLButtonElement | undefined;
+  const t = createMemo(() => translations[state().settings.locale]);
 
   const currentTab = createMemo(() =>
     state().tabs.find((tab) => tab.id === state().currentTabId),
@@ -147,6 +156,8 @@ function App() {
 
   createEffect(() => {
     document.documentElement.dataset.theme = state().settings.theme;
+    document.documentElement.lang =
+      state().settings.locale === "japanese" ? "ja" : "en";
   });
 
   const closeLocation = () => {
@@ -253,7 +264,7 @@ function App() {
             <button
               class="icon-button"
               type="button"
-              aria-label="Go back"
+              aria-label={t().goBack}
               disabled={!currentTab()?.canGoBack}
               onClick={() => send({ type: "go_back" })}
             >
@@ -262,7 +273,7 @@ function App() {
             <button
               class="icon-button"
               type="button"
-              aria-label="Go forward"
+              aria-label={t().goForward}
               disabled={!currentTab()?.canGoForward}
               onClick={() => send({ type: "go_forward" })}
             >
@@ -271,7 +282,7 @@ function App() {
             <button
               class="icon-button"
               type="button"
-              aria-label="Reload"
+              aria-label={t().reload}
               disabled={isNewTabUrl(currentTab()?.url ?? "")}
               onClick={() => {
                 if (!isNewTabUrl(currentTab()?.url ?? "")) {
@@ -285,7 +296,7 @@ function App() {
           <button
             class="icon-button settings-trigger"
             type="button"
-            aria-label="Open settings"
+            aria-label={t().openSettings}
             onClick={openSettings}
           >
             <Gear />
@@ -297,7 +308,7 @@ function App() {
             <Search />
             <span>
               {isNewTabUrl(currentTab()?.url ?? "")
-                ? "Go to a URL"
+                ? t().goToUrl
                 : currentTab()?.url}
             </span>
             <kbd>{shortcutLabel("L")}</kbd>
@@ -308,8 +319,8 @@ function App() {
             type="button"
             aria-label={
               currentTabBookmarked()
-                ? "Remove current page from bookmarks"
-                : "Bookmark current page"
+                ? t().removeCurrentBookmark
+                : t().bookmarkCurrentPage
             }
             aria-pressed={currentTabBookmarked()}
             disabled={isNewTabUrl(currentTab()?.url ?? "")}
@@ -319,9 +330,9 @@ function App() {
           </button>
         </div>
 
-        <section class="tabs-section" aria-label="Open tabs">
+        <section class="tabs-section" aria-label={t().openTabs}>
           <div class="section-label">
-            <span>Tabs</span>
+            <span>{t().tabs}</span>
             <span>{state().tabs.length.toString().padStart(2, "0")}</span>
           </div>
           <div class="tab-list">
@@ -339,7 +350,7 @@ function App() {
                   >
                     <Show
                       when={tab.faviconUrl}
-                      fallback={displayTitle(tab).slice(0, 1).toUpperCase()}
+                      fallback={displayTitle(tab, t().newTab).slice(0, 1).toUpperCase()}
                     >
                       {(faviconUrl) => (
                         <img src={faviconUrl()} alt="" aria-hidden="true" />
@@ -347,16 +358,16 @@ function App() {
                     </Show>
                   </span>
                   <span class="tab-copy">
-                    <span class="tab-title">{displayTitle(tab)}</span>
+                    <span class="tab-title">{displayTitle(tab, t().newTab)}</span>
                     <span class="tab-host">
-                      {isNewTabUrl(tab.url) ? "Ready to browse" : tab.url}
+                      {isNewTabUrl(tab.url) ? t().readyToBrowse : tab.url}
                     </span>
                   </span>
                   <span
                     class="tab-close"
                     role="button"
                     tabindex="0"
-                    aria-label={`Close ${displayTitle(tab)}`}
+                    aria-label={t().closeTab(displayTitle(tab, t().newTab))}
                     onClick={(event) => {
                       event.stopPropagation();
                       send({ type: "close_tab", id: tab.id });
@@ -377,14 +388,14 @@ function App() {
           </div>
         </section>
 
-        <section class="bookmarks-section" aria-label="Bookmarks">
+        <section class="bookmarks-section" aria-label={t().bookmarks}>
           <div class="section-label">
-            <span>Bookmarks</span>
+            <span>{t().bookmarks}</span>
             <span>{state().bookmarks.length.toString().padStart(2, "0")}</span>
           </div>
           <Show
             when={state().bookmarks.length > 0}
-            fallback={<p class="bookmarks-empty">Star a page to keep it here.</p>}
+            fallback={<p class="bookmarks-empty">{t().emptyBookmarks}</p>}
           >
             <div class="bookmark-list">
               <For each={state().bookmarks}>
@@ -408,7 +419,7 @@ function App() {
                       class="bookmark-remove"
                       role="button"
                       tabindex="0"
-                      aria-label={`Remove bookmark ${displayBookmarkTitle(bookmark)}`}
+                      aria-label={t().removeBookmark(displayBookmarkTitle(bookmark))}
                       onClick={(event) => {
                         event.stopPropagation();
                         send({ type: "remove_bookmark", url: bookmark.url });
@@ -436,7 +447,7 @@ function App() {
           onClick={() => send({ type: "new_tab" })}
         >
           <Plus />
-          <span>New tab</span>
+          <span>{t().newTab}</span>
           <kbd>{shortcutLabel("T")}</kbd>
         </button>
       </div>
@@ -454,7 +465,7 @@ function App() {
             }}
             onClick={(event) => event.stopPropagation()}
           >
-            <label id="location-label" for="location">Navigate</label>
+            <label id="location-label" for="location">{t().navigate}</label>
             <div
               class="command-input-wrap"
               classList={{ "search-mode": searchMode() }}
@@ -488,12 +499,12 @@ function App() {
                 autocapitalize="off"
                 spellcheck={false}
                 placeholder={
-                  searchMode() ? "ウェブを検索します" : "URL or domain"
+                  searchMode() ? t().searchWeb : t().urlOrDomain
                 }
               />
             </div>
             <div class="command-hint">
-              <span>Open in current tab</span>
+              <span>{t().openInCurrentTab}</span>
               <kbd>↵</kbd>
             </div>
           </form>
@@ -511,14 +522,14 @@ function App() {
           >
             <header class="settings-header">
               <div>
-                <span class="settings-eyebrow">Browser preferences</span>
-                <h1 id="settings-title">Settings</h1>
+                <span class="settings-eyebrow">{t().browserPreferences}</span>
+                <h1 id="settings-title">{t().settings}</h1>
               </div>
               <button
                 ref={settingsCloseButton}
                 class="icon-button"
                 type="button"
-                aria-label="Close settings"
+                aria-label={t().closeSettings}
                 onClick={closeSettings}
               >
                 <Close />
@@ -527,8 +538,8 @@ function App() {
             <div class="settings-content">
               <div class="settings-group">
                 <div class="settings-copy">
-                  <h2>Default search engine</h2>
-                  <p>Used when the address bar input is not a URL.</p>
+                  <h2>{t().defaultSearchEngine}</h2>
+                  <p>{t().defaultSearchEngineDescription}</p>
                 </div>
                 <div class="search-engine-options">
                   <For each={searchEngines}>
@@ -567,8 +578,8 @@ function App() {
 
               <div class="settings-group">
                 <div class="settings-copy">
-                  <h2>Appearance</h2>
-                  <p>Choose the color theme for the browser chrome.</p>
+                  <h2>{t().appearance}</h2>
+                  <p>{t().appearanceDescription}</p>
                 </div>
                 <div class="theme-options">
                   <For each={themes}>
@@ -576,25 +587,25 @@ function App() {
                       <label
                         class="theme-option"
                         classList={{
-                          selected: state().settings.theme === theme.value,
+                          selected: state().settings.theme === theme,
                         }}
                       >
                         <input
                           type="radio"
                           name="theme"
-                          value={theme.value}
-                          checked={state().settings.theme === theme.value}
+                          value={theme}
+                          checked={state().settings.theme === theme}
                           onChange={() =>
                             send({
                               type: "set_theme",
-                              theme: theme.value,
+                              theme,
                             })
                           }
                         />
                         <span class="radio-mark" aria-hidden="true" />
                         <span class="engine-copy">
-                          <strong>{theme.label}</strong>
-                          <span>{theme.detail}</span>
+                          <strong>{theme === "dark" ? t().dark : t().light}</strong>
+                          <span>{theme === "dark" ? t().darkTheme : t().lightTheme}</span>
                         </span>
                       </label>
                     )}
@@ -604,8 +615,49 @@ function App() {
 
               <div class="settings-group">
                 <div class="settings-copy">
-                  <h2>Privacy</h2>
-                  <p>Remove browsing information kept by this session.</p>
+                  <h2>{t().language}</h2>
+                  <p>{t().languageDescription}</p>
+                </div>
+                <div class="theme-options">
+                  <For each={locales}>
+                    {(locale) => (
+                      <label
+                        class="theme-option"
+                        classList={{
+                          selected: state().settings.locale === locale,
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name="locale"
+                          value={locale}
+                          checked={state().settings.locale === locale}
+                          onChange={() =>
+                            send({
+                              type: "set_locale",
+                              locale,
+                            })
+                          }
+                        />
+                        <span class="radio-mark" aria-hidden="true" />
+                        <span class="engine-copy">
+                          <strong>{locale === "japanese" ? t().japanese : t().english}</strong>
+                          <span>
+                            {locale === "japanese"
+                              ? t().japaneseDescription
+                              : t().englishDescription}
+                          </span>
+                        </span>
+                      </label>
+                    )}
+                  </For>
+                </div>
+              </div>
+
+              <div class="settings-group">
+                <div class="settings-copy">
+                  <h2>{t().privacy}</h2>
+                  <p>{t().privacyDescription}</p>
                 </div>
                 <div class="privacy-actions">
                   <button
@@ -614,8 +666,8 @@ function App() {
                     onClick={() => send({ type: "clear_history" })}
                   >
                     <span>
-                      <strong>Clear history</strong>
-                      <small>Remove the list of visited pages.</small>
+                      <strong>{t().clearHistory}</strong>
+                      <small>{t().clearHistoryDescription}</small>
                     </span>
                     <Trash />
                   </button>
@@ -625,8 +677,8 @@ function App() {
                     onClick={() => send({ type: "clear_cookies" })}
                   >
                     <span>
-                      <strong>Clear cookies</strong>
-                      <small>Clear cookies and browsing data.</small>
+                      <strong>{t().clearCookies}</strong>
+                      <small>{t().clearCookiesDescription}</small>
                     </span>
                     <Cookie />
                   </button>
