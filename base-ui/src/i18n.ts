@@ -15,7 +15,7 @@ export const translations = {
     readyToBrowse: "閲覧を開始できます",
     closeTab: (title: string) => `${title}を閉じる`,
     bookmarks: "お気に入り",
-    emptyBookmarks: "星を押すと、ここにお気に入りが表示されます。",
+    emptyBookmarks: "ページをお気に入りに追加すると、ここに表示されます。",
     removeBookmark: (title: string) => `${title}をお気に入りから削除`,
     navigate: "移動",
     searchWeb: "ウェブを検索",
