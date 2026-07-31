@@ -21,6 +21,14 @@ fn main() {
         "cargo:rerun-if-changed={}",
         base_ui_dir.join("vite.config.ts").display()
     );
+    println!(
+        "cargo:rerun-if-changed={}",
+        base_ui_dir.join("tsconfig.json").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        base_ui_dir.join("pnpm-lock.yaml").display()
+    );
 
     if !base_ui_dir.exists() {
         return;
@@ -35,9 +43,12 @@ fn main() {
         return;
     }
 
-    if !base_ui_dir.join("node_modules").exists() {
-        run(&["install", "--frozen-lockfile"], &base_ui_dir, "install");
-    }
+    // Always run install (not just when node_modules is missing): pnpm skips
+    // reinstalling unchanged deps in well under a second, and this build.rs
+    // only runs at all when base-ui's watched files changed (rerun-if-changed
+    // above), so the cost is paid rarely and buys correctness when
+    // package.json/pnpm-lock.yaml changed but node_modules was left stale.
+    run(&["install", "--frozen-lockfile"], &base_ui_dir, "install");
 
     run(&["run", "build"], &base_ui_dir, "build");
 }
