@@ -538,6 +538,47 @@ function App() {
             <div class="settings-content">
               <div class="settings-group">
                 <div class="settings-copy">
+                  <h2>{t().language}</h2>
+                  <p>{t().languageDescription}</p>
+                </div>
+                <div class="theme-options">
+                  <For each={locales}>
+                    {(locale) => (
+                      <label
+                        class="theme-option"
+                        classList={{
+                          selected: state().settings.locale === locale,
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name="locale"
+                          value={locale}
+                          checked={state().settings.locale === locale}
+                          onChange={() =>
+                            send({
+                              type: "set_locale",
+                              locale,
+                            })
+                          }
+                        />
+                        <span class="radio-mark" aria-hidden="true" />
+                        <span class="engine-copy">
+                          <strong>{locale === "japanese" ? t().japanese : t().english}</strong>
+                          <span>
+                            {locale === "japanese"
+                              ? t().japaneseDescription
+                              : t().englishDescription}
+                          </span>
+                        </span>
+                      </label>
+                    )}
+                  </For>
+                </div>
+              </div>
+
+              <div class="settings-group">
+                <div class="settings-copy">
                   <h2>{t().defaultSearchEngine}</h2>
                   <p>{t().defaultSearchEngineDescription}</p>
                 </div>
@@ -606,47 +647,6 @@ function App() {
                         <span class="engine-copy">
                           <strong>{theme === "dark" ? t().dark : t().light}</strong>
                           <span>{theme === "dark" ? t().darkTheme : t().lightTheme}</span>
-                        </span>
-                      </label>
-                    )}
-                  </For>
-                </div>
-              </div>
-
-              <div class="settings-group">
-                <div class="settings-copy">
-                  <h2>{t().language}</h2>
-                  <p>{t().languageDescription}</p>
-                </div>
-                <div class="theme-options">
-                  <For each={locales}>
-                    {(locale) => (
-                      <label
-                        class="theme-option"
-                        classList={{
-                          selected: state().settings.locale === locale,
-                        }}
-                      >
-                        <input
-                          type="radio"
-                          name="locale"
-                          value={locale}
-                          checked={state().settings.locale === locale}
-                          onChange={() =>
-                            send({
-                              type: "set_locale",
-                              locale,
-                            })
-                          }
-                        />
-                        <span class="radio-mark" aria-hidden="true" />
-                        <span class="engine-copy">
-                          <strong>{locale === "japanese" ? t().japanese : t().english}</strong>
-                          <span>
-                            {locale === "japanese"
-                              ? t().japaneseDescription
-                              : t().englishDescription}
-                          </span>
                         </span>
                       </label>
                     )}
