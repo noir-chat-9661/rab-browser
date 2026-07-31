@@ -9,6 +9,7 @@ use std::{
 
 use browser_core::{
     AppSettings, BookmarkManager, BrowserEngine, HistoryManager, SearchEngine, TabId, TabManager,
+    Theme,
 };
 use browser_engine_wry::WryEngine;
 use browser_mcp_server::{DispatchError, McpRequest, RequestDispatcher, TabInfo};
@@ -66,7 +67,9 @@ enum ChromeCommand {
     RemoveBookmark { url: String },
     SelectHistoryEntry { url: String },
     ClearHistory,
+    ClearCookies,
     SetSearchEngine { engine: String },
+    SetTheme { theme: String },
     FaviconChanged { url: String },
     OpenDevtools,
     OpenMcpHelp,
@@ -89,7 +92,6 @@ struct ChromeState<'a> {
     tabs: Vec<ChromeTab<'a>>,
     current_tab_id: Option<u64>,
     bookmarks: Vec<ChromeBookmark<'a>>,
-    history: Vec<ChromeHistoryEntry<'a>>,
     settings: ChromeSettings<'a>,
 }
 
@@ -113,15 +115,9 @@ struct ChromeBookmark<'a> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ChromeHistoryEntry<'a> {
-    url: &'a str,
-    title: &'a str,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct ChromeSettings<'a> {
     search_engine: &'a str,
+    theme: &'a str,
 }
 
 #[derive(Debug)]
@@ -599,7 +595,6 @@ fn send_state(
     chrome: &WebView,
     tabs: &TabManager,
     bookmarks: &BookmarkManager,
-    history: &HistoryManager,
     settings: &AppSettings,
 ) {
     let state = ChromeState {
@@ -623,17 +618,9 @@ fn send_state(
                 title: &bookmark.title,
             })
             .collect(),
-        history: history
-            .entries()
-            .rev()
-            .take(10)
-            .map(|entry| ChromeHistoryEntry {
-                url: &entry.url,
-                title: &entry.title,
-            })
-            .collect(),
         settings: ChromeSettings {
             search_engine: settings.search_engine.as_str(),
+            theme: settings.theme.as_str(),
         },
     };
     if let Ok(json) = serde_json::to_string(&state) {
@@ -820,7 +807,6 @@ fn handle_mcp_request(
     chrome: &WebView,
     tabs: &mut TabManager,
     bookmarks: &BookmarkManager,
-    history: &HistoryManager,
     settings: &AppSettings,
     views: &mut BTreeMap<TabId, WryEngine>,
     histories: &mut BTreeMap<TabId, TabHistory>,
@@ -857,7 +843,7 @@ fn handle_mcp_request(
             ) {
                 Ok(id) => {
                     bring_chrome_to_front(chrome);
-                    send_state(chrome, tabs, bookmarks, history, settings);
+                    send_state(chrome, tabs, bookmarks, settings);
                     let _ = reply.send(id.get());
                 }
                 Err(error) => {
@@ -885,7 +871,7 @@ fn handle_mcp_request(
             if result == CloseTabResult::CreatedReplacement {
                 bring_chrome_to_front(chrome);
             }
-            send_state(chrome, tabs, bookmarks, history, settings);
+            send_state(chrome, tabs, bookmarks, settings);
             let _ = reply.send(result != CloseTabResult::Ignored);
         }
         McpRequest::SelectTab { id, reply } => {
@@ -894,7 +880,7 @@ fn handle_mcp_request(
                 true
             });
             if selected {
-                send_state(chrome, tabs, bookmarks, history, settings);
+                send_state(chrome, tabs, bookmarks, settings);
             }
             let _ = reply.send(selected);
         }
@@ -913,7 +899,7 @@ fn handle_mcp_request(
                     tab.url = url;
                     tab.favicon_url = None;
                 }
-                send_state(chrome, tabs, bookmarks, history, settings);
+                send_state(chrome, tabs, bookmarks, settings);
             }
             let _ = reply.send(result);
         }
@@ -925,7 +911,7 @@ fn handle_mcp_request(
                         let _ = view.go_back();
                     }
                     update_history_flags(tabs, histories, id);
-                    send_state(chrome, tabs, bookmarks, history, settings);
+                    send_state(chrome, tabs, bookmarks, settings);
                 }
                 moved
             });
@@ -939,7 +925,7 @@ fn handle_mcp_request(
                         let _ = view.go_forward();
                     }
                     update_history_flags(tabs, histories, id);
-                    send_state(chrome, tabs, bookmarks, history, settings);
+                    send_state(chrome, tabs, bookmarks, settings);
                 }
                 moved
             });
@@ -1073,7 +1059,6 @@ fn main() -> wry::Result<()> {
                 &chrome,
                 &mut tabs,
                 &bookmarks,
-                &history,
                 &settings,
                 &mut views,
                 &mut histories,
@@ -1115,7 +1100,7 @@ fn main() -> wry::Result<()> {
                             }
                         }
                     }
-                    send_state(&chrome, &tabs, &bookmarks, &history, &settings);
+                    send_state(&chrome, &tabs, &bookmarks, &settings);
                 }
 
                 for raw_command in commands_rx.try_iter() {
@@ -1144,7 +1129,7 @@ fn main() -> wry::Result<()> {
                             .is_ok()
                             {
                                 bring_chrome_to_front(&chrome);
-                                send_state(&chrome, &tabs, &bookmarks, &history, &settings);
+                                send_state(&chrome, &tabs, &bookmarks, &settings);
                                 focus_location(&window, &chrome, &mut palette_open);
                             }
                         }
@@ -1300,9 +1285,21 @@ fn main() -> wry::Result<()> {
                         ChromeCommand::ClearHistory => {
                             history.clear();
                         }
+                        ChromeCommand::ClearCookies => {
+                            if let Some(view) = tabs.current_id().and_then(|id| views.get(&id))
+                                && let Err(error) = view.webview().clear_all_browsing_data()
+                            {
+                                eprintln!("failed to clear browsing data: {error}");
+                            }
+                        }
                         ChromeCommand::SetSearchEngine { engine } => {
                             if let Ok(engine) = engine.parse() {
                                 settings.search_engine = engine;
+                            }
+                        }
+                        ChromeCommand::SetTheme { theme } => {
+                            if let Ok(theme) = theme.parse::<Theme>() {
+                                settings.theme = theme;
                             }
                         }
                         // Content-originated favicon_changed messages are intercepted and
@@ -1350,7 +1347,7 @@ fn main() -> wry::Result<()> {
                             }
                         }
                     }
-                    send_state(&chrome, &tabs, &bookmarks, &history, &settings);
+                    send_state(&chrome, &tabs, &bookmarks, &settings);
                 }
             }
             Event::WindowEvent { event, .. } => match event {
@@ -1380,7 +1377,7 @@ fn main() -> wry::Result<()> {
                             )
                             .is_ok() =>
                         {
-                            send_state(&chrome, &tabs, &bookmarks, &history, &settings);
+                            send_state(&chrome, &tabs, &bookmarks, &settings);
                             bring_chrome_to_front(&chrome);
                             focus_location(&window, &chrome, &mut palette_open);
                         }
@@ -1427,7 +1424,7 @@ fn main() -> wry::Result<()> {
                                 if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
                                 }
-                                send_state(&chrome, &tabs, &bookmarks, &history, &settings);
+                                send_state(&chrome, &tabs, &bookmarks, &settings);
                             }
                         }
                         KeyCode::KeyI if modifiers.alt_key() => {
