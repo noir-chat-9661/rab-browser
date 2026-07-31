@@ -117,6 +117,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [locationValue, setLocationValue] = createSignal("");
   let locationInput: HTMLInputElement | undefined;
+  let settingsCloseButton: HTMLButtonElement | undefined;
 
   const currentTab = createMemo(() =>
     state().tabs.find((tab) => tab.id === state().currentTabId),
@@ -169,6 +170,9 @@ function App() {
       setSettingsOpen(true);
       send({ type: "palette_opened" });
     }
+    queueMicrotask(() => {
+      settingsCloseButton?.focus();
+    });
   };
 
   const navigate = () => {
@@ -545,6 +549,7 @@ function App() {
                 <h1 id="settings-title">Settings</h1>
               </div>
               <button
+                ref={settingsCloseButton}
                 class="icon-button"
                 type="button"
                 aria-label="Close settings"
