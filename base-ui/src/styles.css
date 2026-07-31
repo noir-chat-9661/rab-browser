@@ -70,10 +70,14 @@ svg {
 .toolbar {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: space-between;
   height: 32px;
   margin-bottom: 15px;
   padding: 0 3px;
+}
+
+.settings-trigger {
+  margin-left: auto;
 }
 
 .history-controls {
@@ -317,12 +321,55 @@ kbd {
 .bookmarks-section {
   display: flex;
   min-height: 76px;
-  max-height: 32%;
+  max-height: 25%;
   flex: 0 1 auto;
   flex-direction: column;
   margin-top: 16px;
   padding-top: 14px;
   border-top: 1px solid #2d2f2b;
+}
+
+.history-section {
+  display: flex;
+  min-height: 76px;
+  max-height: 25%;
+  flex: 0 1 auto;
+  flex-direction: column;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #2d2f2b;
+}
+
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.section-action {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  place-items: center;
+  color: #696d64;
+  background: transparent;
+  border: 0;
+  border-radius: 2px;
+}
+
+.section-action:hover:not(:disabled) {
+  color: #e7e8e1;
+  background: #30332d;
+}
+
+.section-action:disabled {
+  color: #41443e;
+}
+
+.section-action svg {
+  width: 12px;
+  height: 12px;
 }
 
 .bookmark-list {
@@ -381,6 +428,20 @@ kbd {
   color: #eff0e9;
   background: #20221f;
   border-color: #30332d;
+}
+
+.history-entry {
+  grid-template-columns: 24px minmax(0, 1fr);
+}
+
+.history-mark {
+  color: #aeb1a7;
+  background: #292b27;
+  border-color: #41443d;
+}
+
+.history-mark svg {
+  fill: none;
 }
 
 .bookmark-mark {
@@ -554,6 +615,157 @@ kbd {
   font-size: 9px;
 }
 
+.settings-backdrop {
+  align-items: center;
+  padding: 24px;
+}
+
+.settings-panel {
+  width: min(540px, 100%);
+  overflow: hidden;
+  background: rgba(31, 33, 29, 0.98);
+  border: 1px solid #55594e;
+  border-radius: 5px;
+  box-shadow:
+    0 28px 80px rgba(0, 0, 0, 0.62),
+    inset 0 1px rgba(255, 255, 255, 0.025);
+  animation: palette-in 120ms ease-out;
+}
+
+.settings-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 20px 20px 17px;
+  background:
+    linear-gradient(110deg, rgba(214, 255, 114, 0.055), transparent 45%),
+    #242621;
+  border-bottom: 1px solid #3b3e37;
+}
+
+.settings-eyebrow {
+  display: block;
+  margin-bottom: 5px;
+  color: #d6ff72;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.settings-header h1 {
+  margin: 0;
+  color: #f1f2eb;
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.settings-group {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 24px;
+  padding: 22px 20px 24px;
+}
+
+.settings-copy h2 {
+  margin: 0 0 7px;
+  color: #dfe0d8;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-copy p {
+  margin: 0;
+  color: #73776e;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.search-engine-options {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.search-engine-option {
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr);
+  align-items: center;
+  min-height: 47px;
+  gap: 10px;
+  padding: 7px 11px;
+  color: #a6aaa0;
+  background: #1a1c19;
+  border: 1px solid #363932;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.search-engine-option:hover {
+  color: #e5e6df;
+  border-color: #4b4f45;
+}
+
+.search-engine-option.selected {
+  color: #f0f1e9;
+  background: #25291f;
+  border-color: #68774a;
+  box-shadow: inset 2px 0 #d6ff72;
+}
+
+.search-engine-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.radio-mark {
+  display: grid;
+  width: 13px;
+  height: 13px;
+  place-items: center;
+  border: 1px solid #656960;
+  border-radius: 50%;
+}
+
+.selected .radio-mark {
+  border-color: #d6ff72;
+}
+
+.selected .radio-mark::after {
+  width: 5px;
+  height: 5px;
+  background: #d6ff72;
+  border-radius: 50%;
+  content: "";
+}
+
+.search-engine-option:has(input:focus-visible) {
+  outline: 1px solid #d6ff72;
+  outline-offset: 2px;
+}
+
+.engine-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.engine-copy strong {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.engine-copy span {
+  color: #686c63;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+}
+
 @keyframes palette-in {
   from {
     opacity: 0;
@@ -562,7 +774,15 @@ kbd {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .command-palette {
+  .command-palette,
+  .settings-panel {
     animation: none;
+  }
+}
+
+@media (max-width: 460px) {
+  .settings-group {
+    grid-template-columns: 1fr;
+    gap: 15px;
   }
 }
