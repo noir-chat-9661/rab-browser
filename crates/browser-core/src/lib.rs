@@ -77,7 +77,11 @@ impl BookmarkManager {
 
     /// Removes a bookmark by URL. Returns `true` if it existed.
     pub fn remove(&mut self, url: &str) -> bool {
-        let Some(index) = self.bookmarks.iter().position(|bookmark| bookmark.url == url) else {
+        let Some(index) = self
+            .bookmarks
+            .iter()
+            .position(|bookmark| bookmark.url == url)
+        else {
             return false;
         };
         self.bookmarks.remove(index);
@@ -90,6 +94,107 @@ impl BookmarkManager {
 
     pub fn bookmarks(&self) -> impl Iterator<Item = &Bookmark> {
         self.bookmarks.iter()
+    }
+}
+
+/// Search providers supported by the browser's address bar.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SearchEngine {
+    #[default]
+    Google,
+    DuckDuckGo,
+    Bing,
+}
+
+impl SearchEngine {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Google => "google",
+            Self::DuckDuckGo => "duckduckgo",
+            Self::Bing => "bing",
+        }
+    }
+}
+
+impl std::str::FromStr for SearchEngine {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "google" => Ok(Self::Google),
+            "duckduckgo" => Ok(Self::DuckDuckGo),
+            "bing" => Ok(Self::Bing),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Browser settings kept for the lifetime of the process.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AppSettings {
+    pub search_engine: SearchEngine,
+}
+
+/// One page in the browser-wide browsing history.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryEntry {
+    pub url: String,
+    pub title: String,
+}
+
+/// Owns the bounded in-memory browsing history.
+#[derive(Debug)]
+pub struct HistoryManager {
+    entries: Vec<HistoryEntry>,
+    capacity: usize,
+}
+
+impl Default for HistoryManager {
+    fn default() -> Self {
+        Self::with_capacity(200)
+    }
+}
+
+impl HistoryManager {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            entries: Vec::new(),
+            capacity,
+        }
+    }
+
+    /// Records a navigation unless it repeats the most recent URL.
+    pub fn record(&mut self, url: impl Into<String>, title: impl Into<String>) {
+        let url = url.into();
+        if self.entries.last().is_some_and(|entry| entry.url == url) {
+            return;
+        }
+
+        self.entries.push(HistoryEntry {
+            url,
+            title: title.into(),
+        });
+        if self.entries.len() > self.capacity {
+            self.entries.remove(0);
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    pub fn update_latest_title(&mut self, url: &str, title: impl Into<String>) {
+        if let Some(entry) = self.entries.iter_mut().rev().find(|entry| entry.url == url) {
+            entry.title = title.into();
+        }
+    }
+
+    pub fn entries(&self) -> impl DoubleEndedIterator<Item = &HistoryEntry> {
+        self.entries.iter()
     }
 }
 
@@ -222,5 +327,37 @@ mod tests {
         assert!(!bookmarks.toggle("https://example.com", "Updated title"));
         assert!(!bookmarks.contains("https://example.com"));
         assert_eq!(bookmarks.bookmarks().count(), 0);
+    }
+
+    #[test]
+    fn app_settings_default_to_google() {
+        assert_eq!(AppSettings::default().search_engine, SearchEngine::Google);
+    }
+
+    #[test]
+    fn history_skips_consecutive_duplicates_and_discards_old_entries() {
+        let mut history = HistoryManager::with_capacity(2);
+
+        history.record("https://example.com", "Example");
+        history.record("https://example.com", "Duplicate");
+        history.record("https://example.org", "Example Org");
+        history.record("https://example.net", "Example Net");
+
+        assert_eq!(
+            history.entries().collect::<Vec<_>>(),
+            vec![
+                &HistoryEntry {
+                    url: "https://example.org".to_owned(),
+                    title: "Example Org".to_owned(),
+                },
+                &HistoryEntry {
+                    url: "https://example.net".to_owned(),
+                    title: "Example Net".to_owned(),
+                },
+            ]
+        );
+
+        history.clear();
+        assert_eq!(history.entries().count(), 0);
     }
 }

@@ -16,16 +16,28 @@ type Bookmark = {
   title: string;
 };
 
+type HistoryEntry = {
+  url: string;
+  title: string;
+};
+
+type SearchEngine = "google" | "duckduckgo" | "bing";
+
 type BrowserState = {
   type: "state";
   tabs: Tab[];
   currentTabId: number | null;
   bookmarks: Bookmark[];
+  history: HistoryEntry[];
+  settings: {
+    searchEngine: SearchEngine;
+  };
 };
 
 type ChromeApi = {
   receive: (state: BrowserState) => void;
   openLocation: () => void;
+  openSettings: () => void;
 };
 
 declare global {
@@ -40,6 +52,10 @@ const emptyState: BrowserState = {
   tabs: [],
   currentTabId: null,
   bookmarks: [],
+  history: [],
+  settings: {
+    searchEngine: "google",
+  },
 };
 
 function send(message: Record<string, unknown>) {
@@ -64,7 +80,7 @@ function shortcutLabel(key: string) {
 // prefix match) so an arbitrary data:text/html page a user navigates to
 // isn't mistaken for the new-tab placeholder.
 const NEW_TAB_URL =
-  "data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%20lang=%22ja%22%3E%3Chead%3E%3Cmeta%20charset=%22utf-8%22%3E%3Ctitle%3E%E6%96%B0%E3%81%97%E3%81%84%E3%82%BF%E3%83%96%3C/title%3E%3Cstyle%3Ehtml%2Cbody%7Bheight%3A100%25%7Dbody%7Bmargin%3A0%3Bdisplay%3Agrid%3Bplace-items%3Acenter%3Bbackground%3A%23171816%3Bcolor%3A%23a2a59d%3Bfont%3A14px%20system-ui%2Csans-serif%7D%3C/style%3E%3C/head%3E%3Cbody%3E%E6%96%B0%E3%81%97%E3%81%84%E3%82%BF%E3%83%96%3C/body%3E%3C/html%3E";
+  "rab://newtab/";
 
 function isNewTabUrl(url: string) {
   return url === "about:blank" || url === NEW_TAB_URL;
@@ -89,11 +105,19 @@ function displayBookmarkTitle(bookmark: Bookmark) {
   }
 }
 
+const searchEngines: { value: SearchEngine; label: string; detail: string }[] = [
+  { value: "google", label: "Google", detail: "google.com" },
+  { value: "duckduckgo", label: "DuckDuckGo", detail: "duckduckgo.com" },
+  { value: "bing", label: "Bing", detail: "bing.com" },
+];
+
 function App() {
   const [state, setState] = createSignal(emptyState);
   const [locationOpen, setLocationOpen] = createSignal(false);
+  const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [locationValue, setLocationValue] = createSignal("");
   let locationInput: HTMLInputElement | undefined;
+  let settingsCloseButton: HTMLButtonElement | undefined;
 
   const currentTab = createMemo(() =>
     state().tabs.find((tab) => tab.id === state().currentTabId),
@@ -103,6 +127,12 @@ function App() {
     return Boolean(url && state().bookmarks.some((bookmark) => bookmark.url === url));
   });
   const searchMode = createMemo(() => locationValue().startsWith("?"));
+  const searchEngineLabel = createMemo(
+    () =>
+      searchEngines.find(
+        (engine) => engine.value === state().settings.searchEngine,
+      )?.label ?? "Google",
+  );
   const displayedLocationValue = createMemo(() =>
     searchMode() ? locationValue().slice(1) : locationValue(),
   );
@@ -114,6 +144,7 @@ function App() {
   };
 
   const openLocation = () => {
+    setSettingsOpen(false);
     setLocationValue(
       isNewTabUrl(currentTab()?.url ?? "") ? "" : currentTab()?.url ?? "",
     );
@@ -124,6 +155,23 @@ function App() {
     queueMicrotask(() => {
       locationInput?.focus();
       locationInput?.select();
+    });
+  };
+
+  const closeSettings = () => {
+    if (!settingsOpen()) return;
+    setSettingsOpen(false);
+    send({ type: "palette_closed" });
+  };
+
+  const openSettings = () => {
+    setLocationOpen(false);
+    if (!settingsOpen()) {
+      setSettingsOpen(true);
+      send({ type: "palette_opened" });
+    }
+    queueMicrotask(() => {
+      settingsCloseButton?.focus();
     });
   };
 
@@ -138,14 +186,22 @@ function App() {
     window.rabChrome = {
       receive: setState,
       openLocation,
+      openSettings,
     };
     send({ type: "chrome_ready" });
 
     document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && locationOpen()) {
-        event.preventDefault();
-        closeLocation();
-        return;
+      if (event.key === "Escape") {
+        if (settingsOpen()) {
+          event.preventDefault();
+          closeSettings();
+          return;
+        }
+        if (locationOpen()) {
+          event.preventDefault();
+          closeLocation();
+          return;
+        }
       }
 
       if (
@@ -214,6 +270,14 @@ function App() {
               <Reload />
             </button>
           </div>
+          <button
+            class="icon-button settings-trigger"
+            type="button"
+            aria-label="Open settings"
+            onClick={openSettings}
+          >
+            <Gear />
+          </button>
         </header>
 
         <div class="location-row">
@@ -354,6 +418,52 @@ function App() {
           </Show>
         </section>
 
+        <section class="history-section" aria-label="History">
+          <div class="section-label">
+            <span>History</span>
+            <span class="section-actions">
+              <span>{state().history.length.toString().padStart(2, "0")}</span>
+              <button
+                class="section-action"
+                type="button"
+                aria-label="Clear history"
+                title="Clear history"
+                disabled={state().history.length === 0}
+                onClick={() => send({ type: "clear_history" })}
+              >
+                <Trash />
+              </button>
+            </span>
+          </div>
+          <Show
+            when={state().history.length > 0}
+            fallback={<p class="bookmarks-empty">Visited pages appear here.</p>}
+          >
+            <div class="bookmark-list">
+              <For each={state().history}>
+                {(entry) => (
+                  <button
+                    class="bookmark history-entry"
+                    type="button"
+                    title={entry.url}
+                    onClick={() =>
+                      send({ type: "select_history_entry", url: entry.url })
+                    }
+                  >
+                    <span class="bookmark-mark history-mark"><Clock /></span>
+                    <span class="bookmark-copy">
+                      <span class="bookmark-title">
+                        {displayBookmarkTitle(entry)}
+                      </span>
+                      <span class="bookmark-url">{entry.url}</span>
+                    </span>
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
+        </section>
+
         <button
           class="new-tab"
           type="button"
@@ -385,7 +495,7 @@ function App() {
             >
               <Search />
               <Show when={searchMode()}>
-                <span class="search-provider">Google</span>
+                <span class="search-provider">{searchEngineLabel()}</span>
               </Show>
               <input
                 ref={locationInput}
@@ -423,6 +533,73 @@ function App() {
           </form>
         </div>
       </Show>
+
+      <Show when={settingsOpen()}>
+        <div class="palette-backdrop settings-backdrop" onClick={closeSettings}>
+          <section
+            class="settings-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header class="settings-header">
+              <div>
+                <span class="settings-eyebrow">Browser preferences</span>
+                <h1 id="settings-title">Settings</h1>
+              </div>
+              <button
+                ref={settingsCloseButton}
+                class="icon-button"
+                type="button"
+                aria-label="Close settings"
+                onClick={closeSettings}
+              >
+                <Close />
+              </button>
+            </header>
+            <div class="settings-group">
+              <div class="settings-copy">
+                <h2>Default search engine</h2>
+                <p>Used when the address bar input is not a URL.</p>
+              </div>
+              <div class="search-engine-options">
+                <For each={searchEngines}>
+                  {(engine) => (
+                    <label
+                      class="search-engine-option"
+                      classList={{
+                        selected:
+                          state().settings.searchEngine === engine.value,
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="search-engine"
+                        value={engine.value}
+                        checked={
+                          state().settings.searchEngine === engine.value
+                        }
+                        onChange={() =>
+                          send({
+                            type: "set_search_engine",
+                            engine: engine.value,
+                          })
+                        }
+                      />
+                      <span class="radio-mark" aria-hidden="true" />
+                      <span class="engine-copy">
+                        <strong>{engine.label}</strong>
+                        <span>{engine.detail}</span>
+                      </span>
+                    </label>
+                  )}
+                </For>
+              </div>
+            </div>
+          </section>
+        </div>
+      </Show>
     </main>
   );
 }
@@ -457,6 +634,23 @@ function Star() {
       <path d="m10 3 2.1 4.3 4.7.7-3.4 3.3.8 4.7-4.2-2.2L5.8 16l.8-4.7L3.2 8l4.7-.7L10 3Z" />
     </svg>
   );
+}
+
+function Gear() {
+  return (
+    <svg viewBox="0 0 20 20">
+      <circle cx="10" cy="10" r="2.4" />
+      <path d="M8.8 3.1h2.4l.5 1.8 1.3.8 1.8-.5 1.2 2.1-1.3 1.3v1.5l1.3 1.3-1.2 2.1-1.8-.5-1.3.8-.5 1.8H8.8l-.5-1.8-1.3-.8-1.8.5L4 11.4l1.3-1.3V8.6L4 7.3l1.2-2.1 1.8.5 1.3-.8.5-1.8Z" />
+    </svg>
+  );
+}
+
+function Clock() {
+  return <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" /><path d="M10 6.5V10l2.7 1.7" /></svg>;
+}
+
+function Trash() {
+  return <svg viewBox="0 0 20 20"><path d="M5.5 6.5h9M8 4.5h4M7 6.5l.5 9h5l.5-9M9 9v4m2-4v4" /></svg>;
 }
 
 render(() => <App />, document.getElementById("root")!);

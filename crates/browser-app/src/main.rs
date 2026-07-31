@@ -7,7 +7,9 @@ use std::{
     },
 };
 
-use browser_core::{BookmarkManager, BrowserEngine, TabId, TabManager};
+use browser_core::{
+    AppSettings, BookmarkManager, BrowserEngine, HistoryManager, SearchEngine, TabId, TabManager,
+};
 use browser_engine_wry::WryEngine;
 use browser_mcp_server::{DispatchError, McpRequest, RequestDispatcher, TabInfo};
 #[cfg(target_os = "macos")]
@@ -62,6 +64,9 @@ enum ChromeCommand {
     ToggleBookmark,
     SelectBookmark { url: String },
     RemoveBookmark { url: String },
+    SelectHistoryEntry { url: String },
+    ClearHistory,
+    SetSearchEngine { engine: String },
     FaviconChanged { url: String },
     OpenDevtools,
     OpenMcpHelp,
@@ -84,6 +89,8 @@ struct ChromeState<'a> {
     tabs: Vec<ChromeTab<'a>>,
     current_tab_id: Option<u64>,
     bookmarks: Vec<ChromeBookmark<'a>>,
+    history: Vec<ChromeHistoryEntry<'a>>,
+    settings: ChromeSettings<'a>,
 }
 
 #[derive(Serialize)]
@@ -102,6 +109,19 @@ struct ChromeTab<'a> {
 struct ChromeBookmark<'a> {
     url: &'a str,
     title: &'a str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChromeHistoryEntry<'a> {
+    url: &'a str,
+    title: &'a str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChromeSettings<'a> {
+    search_engine: &'a str,
 }
 
 #[derive(Debug)]
@@ -247,8 +267,6 @@ fn internal_page_html(title: &str, content: &str) -> String {
          border:1px solid #343630;border-radius:4px;font:12px/1.7 \"SFMono-Regular\",Consolas,monospace;\
          white-space:pre-wrap;word-break:break-word}}\
          code{{color:#d6ff72}}\
-         .status{{display:inline-flex;padding:6px 10px;color:#171816;background:#d6ff72;\
-         border-radius:3px;font-weight:700}}\
          </style></head><body><main><h1>{}</h1>{}</main></body></html>",
         escape_html(title),
         escape_html(title),
@@ -258,14 +276,6 @@ fn internal_page_html(title: &str, content: &str) -> String {
 
 fn mcp_help_url() -> String {
     internal_page_url("help")
-}
-
-fn settings_url(mcp_enabled: bool) -> String {
-    format!(
-        "{}?mcp={}",
-        internal_page_url("settings"),
-        u8::from(mcp_enabled)
-    )
 }
 
 fn internal_page_response(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
@@ -283,20 +293,6 @@ fn internal_page_response(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
             "MCPの使い方",
             &format!("<pre>{}</pre>", escape_html(MCP_SKILL)),
         ),
-        (Some("settings"), "/") => {
-            let mcp_enabled = uri.query().is_some_and(|query| {
-                url::form_urlencoded::parse(query.as_bytes())
-                    .any(|(key, value)| key == "mcp" && value == "1")
-            });
-            let status = if mcp_enabled { "有効" } else { "無効" };
-            internal_page_html(
-                "設定",
-                &format!(
-                    "<p>現在の起動状態</p><p class=\"status\">MCP: {status}</p>\
-                     <p><code>--mcp</code> または <code>RAB_MCP=1</code> で起動時に有効化できます。</p>"
-                ),
-            )
-        }
         _ => {
             return Response::builder()
                 .status(404)
@@ -312,13 +308,13 @@ fn internal_page_response(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
         .expect("valid internal-page response")
 }
 
-fn normalize_url(value: &str) -> String {
+fn normalize_url(value: &str, search_engine: SearchEngine) -> String {
     let value = value.trim();
     if value.is_empty() {
         return NEW_TAB_URL.to_owned();
     }
     if let Some(query) = value.strip_prefix('?') {
-        return search_url(query.trim());
+        return search_url(query.trim(), search_engine);
     }
     let has_explicit_scheme = value.contains("://")
         || value.starts_with("about:")
@@ -329,7 +325,7 @@ fn normalize_url(value: &str) -> String {
     } else if is_likely_domain(value) {
         format!("https://{value}")
     } else {
-        search_url(value)
+        search_url(value, search_engine)
     }
 }
 
@@ -365,11 +361,15 @@ fn is_likely_domain(value: &str) -> bool {
         })
 }
 
-fn search_url(query: &str) -> String {
+fn search_url(query: &str, search_engine: SearchEngine) -> String {
     let query = url::form_urlencoded::Serializer::new(String::new())
         .append_pair("q", query)
         .finish();
-    format!("https://www.google.com/search?{query}")
+    match search_engine {
+        SearchEngine::Google => format!("https://www.google.com/search?{query}"),
+        SearchEngine::DuckDuckGo => format!("https://duckduckgo.com/?{query}"),
+        SearchEngine::Bing => format!("https://www.bing.com/search?{query}"),
+    }
 }
 
 fn primary_modifier_pressed(modifiers: ModifiersState) -> bool {
@@ -595,7 +595,13 @@ fn update_history_flags(tabs: &mut TabManager, histories: &BTreeMap<TabId, TabHi
     }
 }
 
-fn send_state(chrome: &WebView, tabs: &TabManager, bookmarks: &BookmarkManager) {
+fn send_state(
+    chrome: &WebView,
+    tabs: &TabManager,
+    bookmarks: &BookmarkManager,
+    history: &HistoryManager,
+    settings: &AppSettings,
+) {
     let state = ChromeState {
         r#type: "state",
         tabs: tabs
@@ -617,6 +623,18 @@ fn send_state(chrome: &WebView, tabs: &TabManager, bookmarks: &BookmarkManager) 
                 title: &bookmark.title,
             })
             .collect(),
+        history: history
+            .entries()
+            .rev()
+            .take(10)
+            .map(|entry| ChromeHistoryEntry {
+                url: &entry.url,
+                title: &entry.title,
+            })
+            .collect(),
+        settings: ChromeSettings {
+            search_engine: settings.search_engine.as_str(),
+        },
     };
     if let Ok(json) = serde_json::to_string(&state) {
         let _ = chrome.evaluate_script(&format!("window.rabChrome?.receive({json});"));
@@ -633,8 +651,9 @@ fn add_tab(
     commands_tx: &Sender<String>,
     url: &str,
     sidebar_visible: bool,
+    search_engine: SearchEngine,
 ) -> wry::Result<TabId> {
-    let url = normalize_url(url);
+    let url = normalize_url(url, search_engine);
     let id = tabs.add_tab(url.clone());
     match create_content_view(window, id, &url, sidebar_visible, events_tx, commands_tx) {
         Ok(view) => {
@@ -660,6 +679,7 @@ fn close_tab(
     commands_tx: &Sender<String>,
     id: TabId,
     sidebar_visible: bool,
+    search_engine: SearchEngine,
 ) -> CloseTabResult {
     if is_only_new_tab(tabs, id) {
         return CloseTabResult::Ignored;
@@ -679,6 +699,7 @@ fn close_tab(
             commands_tx,
             NEW_TAB_URL,
             sidebar_visible,
+            search_engine,
         )
         .is_ok()
         {
@@ -728,6 +749,15 @@ fn focus_location(window: &Window, chrome: &WebView, palette_open: &mut bool) {
     bring_chrome_to_front(chrome);
     let _ = chrome.focus();
     let _ = chrome.evaluate_script("window.rabChrome?.openLocation();");
+}
+
+fn open_settings(window: &Window, chrome: &WebView, palette_open: &mut bool) {
+    *palette_open = true;
+    let _ = chrome.set_visible(true);
+    let _ = chrome.set_bounds(full_window_bounds(window));
+    bring_chrome_to_front(chrome);
+    let _ = chrome.focus();
+    let _ = chrome.evaluate_script("window.rabChrome?.openSettings();");
 }
 
 fn mcp_env_enabled() -> bool {
@@ -790,6 +820,8 @@ fn handle_mcp_request(
     chrome: &WebView,
     tabs: &mut TabManager,
     bookmarks: &BookmarkManager,
+    history: &HistoryManager,
+    settings: &AppSettings,
     views: &mut BTreeMap<TabId, WryEngine>,
     histories: &mut BTreeMap<TabId, TabHistory>,
     content_events_tx: &Sender<ContentEvent>,
@@ -821,10 +853,11 @@ fn handle_mcp_request(
                 commands_tx,
                 url.as_deref().unwrap_or(NEW_TAB_URL),
                 sidebar_visible,
+                settings.search_engine,
             ) {
                 Ok(id) => {
                     bring_chrome_to_front(chrome);
-                    send_state(chrome, tabs, bookmarks);
+                    send_state(chrome, tabs, bookmarks, history, settings);
                     let _ = reply.send(id.get());
                 }
                 Err(error) => {
@@ -847,11 +880,12 @@ fn handle_mcp_request(
                 commands_tx,
                 id,
                 sidebar_visible,
+                settings.search_engine,
             );
             if result == CloseTabResult::CreatedReplacement {
                 bring_chrome_to_front(chrome);
             }
-            send_state(chrome, tabs, bookmarks);
+            send_state(chrome, tabs, bookmarks, history, settings);
             let _ = reply.send(result != CloseTabResult::Ignored);
         }
         McpRequest::SelectTab { id, reply } => {
@@ -860,7 +894,7 @@ fn handle_mcp_request(
                 true
             });
             if selected {
-                send_state(chrome, tabs, bookmarks);
+                send_state(chrome, tabs, bookmarks, history, settings);
             }
             let _ = reply.send(selected);
         }
@@ -869,7 +903,7 @@ fn handle_mcp_request(
                 let _ = reply.send(Err("no active tab".to_owned()));
                 return;
             };
-            let url = normalize_url(&url);
+            let url = normalize_url(&url, settings.search_engine);
             let result = views
                 .get_mut(&id)
                 .ok_or_else(|| "active tab has no content view".to_owned())
@@ -879,7 +913,7 @@ fn handle_mcp_request(
                     tab.url = url;
                     tab.favicon_url = None;
                 }
-                send_state(chrome, tabs, bookmarks);
+                send_state(chrome, tabs, bookmarks, history, settings);
             }
             let _ = reply.send(result);
         }
@@ -891,7 +925,7 @@ fn handle_mcp_request(
                         let _ = view.go_back();
                     }
                     update_history_flags(tabs, histories, id);
-                    send_state(chrome, tabs, bookmarks);
+                    send_state(chrome, tabs, bookmarks, history, settings);
                 }
                 moved
             });
@@ -905,7 +939,7 @@ fn handle_mcp_request(
                         let _ = view.go_forward();
                     }
                     update_history_flags(tabs, histories, id);
-                    send_state(chrome, tabs, bookmarks);
+                    send_state(chrome, tabs, bookmarks, history, settings);
                 }
                 moved
             });
@@ -988,6 +1022,8 @@ fn main() -> wry::Result<()> {
             .expect("failed to install the macOS Cmd+W event monitor");
     let mut tabs = TabManager::new();
     let mut bookmarks = BookmarkManager::new();
+    let mut history = HistoryManager::new();
+    let mut settings = AppSettings::default();
     let mut views = BTreeMap::new();
     let mut histories = BTreeMap::new();
     let mut sidebar_visible = true;
@@ -1000,6 +1036,7 @@ fn main() -> wry::Result<()> {
         &commands_tx,
         &initial_url,
         sidebar_visible,
+        settings.search_engine,
     )?;
 
     let chrome_commands_tx = commands_tx.clone();
@@ -1036,6 +1073,8 @@ fn main() -> wry::Result<()> {
                 &chrome,
                 &mut tabs,
                 &bookmarks,
+                &history,
+                &settings,
                 &mut views,
                 &mut histories,
                 &content_events_tx,
@@ -1047,13 +1086,23 @@ fn main() -> wry::Result<()> {
                     match event {
                         ContentEvent::TitleChanged { id, title } => {
                             if let Some(tab) = tabs.tab_mut(id) {
-                                tab.title = title;
+                                tab.title = title.clone();
+                                if !is_new_tab_url(&tab.url) {
+                                    history.update_latest_title(&tab.url, title);
+                                }
                             }
                         }
                         ContentEvent::PageLoaded { id, url } => {
                             if let Some(tab) = tabs.tab_mut(id) {
                                 tab.url = url.clone();
                                 tab.favicon_url = None;
+                            }
+                            if !is_new_tab_url(&url) {
+                                let title = tabs
+                                    .tab(id)
+                                    .map(|tab| tab.title.clone())
+                                    .unwrap_or_default();
+                                history.record(url.clone(), title);
                             }
                             if let Some(history) = histories.get_mut(&id) {
                                 history.record_page_load(url);
@@ -1066,7 +1115,7 @@ fn main() -> wry::Result<()> {
                             }
                         }
                     }
-                    send_state(&chrome, &tabs, &bookmarks);
+                    send_state(&chrome, &tabs, &bookmarks, &history, &settings);
                 }
 
                 for raw_command in commands_rx.try_iter() {
@@ -1090,11 +1139,12 @@ fn main() -> wry::Result<()> {
                                 &commands_tx,
                                 url.as_deref().unwrap_or(NEW_TAB_URL),
                                 sidebar_visible,
+                                settings.search_engine,
                             )
                             .is_ok()
                             {
                                 bring_chrome_to_front(&chrome);
-                                send_state(&chrome, &tabs, &bookmarks);
+                                send_state(&chrome, &tabs, &bookmarks, &history, &settings);
                                 focus_location(&window, &chrome, &mut palette_open);
                             }
                         }
@@ -1109,6 +1159,7 @@ fn main() -> wry::Result<()> {
                                     &commands_tx,
                                     id,
                                     sidebar_visible,
+                                    settings.search_engine,
                                 );
                                 if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
@@ -1126,6 +1177,7 @@ fn main() -> wry::Result<()> {
                                     &commands_tx,
                                     id,
                                     sidebar_visible,
+                                    settings.search_engine,
                                 );
                                 if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
@@ -1134,7 +1186,7 @@ fn main() -> wry::Result<()> {
                         }
                         ChromeCommand::Navigate { url } => {
                             if let Some(id) = tabs.current_id() {
-                                let url = normalize_url(&url);
+                                let url = normalize_url(&url, settings.search_engine);
                                 if let Some(view) = views.get_mut(&id)
                                     && view.navigate(&url).is_ok()
                                     && let Some(tab) = tabs.tab_mut(id)
@@ -1148,6 +1200,13 @@ fn main() -> wry::Result<()> {
                             if let Some(id) = tabs.current_id() {
                                 if let Some(tab) = tabs.tab_mut(id) {
                                     tab.url = url.clone();
+                                }
+                                if !is_new_tab_url(&url) {
+                                    let title = tabs
+                                        .tab(id)
+                                        .map(|tab| tab.title.clone())
+                                        .unwrap_or_default();
+                                    history.record(url.clone(), title);
                                 }
                                 if let Some(history) = histories.get_mut(&id) {
                                     history.record_page_load(url);
@@ -1213,7 +1272,7 @@ fn main() -> wry::Result<()> {
                         }
                         ChromeCommand::SelectBookmark { url } => {
                             if let Some(id) = tabs.current_id() {
-                                let url = normalize_url(&url);
+                                let url = normalize_url(&url, settings.search_engine);
                                 if let Some(view) = views.get_mut(&id)
                                     && view.navigate(&url).is_ok()
                                     && let Some(tab) = tabs.tab_mut(id)
@@ -1225,6 +1284,26 @@ fn main() -> wry::Result<()> {
                         }
                         ChromeCommand::RemoveBookmark { url } => {
                             bookmarks.remove(&url);
+                        }
+                        ChromeCommand::SelectHistoryEntry { url } => {
+                            if let Some(id) = tabs.current_id() {
+                                let url = normalize_url(&url, settings.search_engine);
+                                if let Some(view) = views.get_mut(&id)
+                                    && view.navigate(&url).is_ok()
+                                    && let Some(tab) = tabs.tab_mut(id)
+                                {
+                                    tab.url = url;
+                                    tab.favicon_url = None;
+                                }
+                            }
+                        }
+                        ChromeCommand::ClearHistory => {
+                            history.clear();
+                        }
+                        ChromeCommand::SetSearchEngine { engine } => {
+                            if let Ok(engine) = engine.parse() {
+                                settings.search_engine = engine;
+                            }
                         }
                         // Content-originated favicon_changed messages are intercepted and
                         // rerouted to ContentEvent::FaviconChanged (with the correct tab id)
@@ -1247,6 +1326,7 @@ fn main() -> wry::Result<()> {
                                 &commands_tx,
                                 &mcp_help_url(),
                                 sidebar_visible,
+                                settings.search_engine,
                             )
                             .is_ok()
                             {
@@ -1254,20 +1334,7 @@ fn main() -> wry::Result<()> {
                             }
                         }
                         ChromeCommand::OpenSettings => {
-                            if add_tab(
-                                &window,
-                                &mut tabs,
-                                &mut views,
-                                &mut histories,
-                                &content_events_tx,
-                                &commands_tx,
-                                &settings_url(mcp_enabled),
-                                sidebar_visible,
-                            )
-                            .is_ok()
-                            {
-                                bring_chrome_to_front(&chrome);
-                            }
+                            open_settings(&window, &chrome, &mut palette_open);
                         }
                         ChromeCommand::PaletteOpened => {
                             palette_open = true;
@@ -1283,7 +1350,7 @@ fn main() -> wry::Result<()> {
                             }
                         }
                     }
-                    send_state(&chrome, &tabs, &bookmarks);
+                    send_state(&chrome, &tabs, &bookmarks, &history, &settings);
                 }
             }
             Event::WindowEvent { event, .. } => match event {
@@ -1309,10 +1376,11 @@ fn main() -> wry::Result<()> {
                                 &commands_tx,
                                 NEW_TAB_URL,
                                 sidebar_visible,
+                                settings.search_engine,
                             )
                             .is_ok() =>
                         {
-                            send_state(&chrome, &tabs, &bookmarks);
+                            send_state(&chrome, &tabs, &bookmarks, &history, &settings);
                             bring_chrome_to_front(&chrome);
                             focus_location(&window, &chrome, &mut palette_open);
                         }
@@ -1354,11 +1422,12 @@ fn main() -> wry::Result<()> {
                                     &commands_tx,
                                     id,
                                     sidebar_visible,
+                                    settings.search_engine,
                                 );
                                 if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
                                 }
-                                send_state(&chrome, &tabs, &bookmarks);
+                                send_state(&chrome, &tabs, &bookmarks, &history, &settings);
                             }
                         }
                         KeyCode::KeyI if modifiers.alt_key() => {
@@ -1381,9 +1450,9 @@ fn main() -> wry::Result<()> {
 mod tests {
     use super::{
         NEW_TAB_URL, TabHistory, eval_result, internal_page_response, is_only_new_tab,
-        mcp_help_url, normalize_url, parse_startup_args, settings_url,
+        mcp_help_url, normalize_url, parse_startup_args,
     };
-    use browser_core::TabManager;
+    use browser_core::{SearchEngine, TabManager};
     use wry::http::{Request, StatusCode, header::CONTENT_TYPE};
 
     fn request_internal_page(url: &str) -> wry::http::Response<Vec<u8>> {
@@ -1392,31 +1461,55 @@ mod tests {
 
     #[test]
     fn normalizes_urls_and_search_queries() {
-        assert_eq!(normalize_url(""), NEW_TAB_URL);
+        assert_eq!(normalize_url("", SearchEngine::Google), NEW_TAB_URL);
         assert_eq!(
-            normalize_url("example.com/path"),
+            normalize_url("example.com/path", SearchEngine::Google),
             "https://example.com/path"
         );
-        assert_eq!(normalize_url("https://example.com"), "https://example.com");
         assert_eq!(
-            normalize_url("rust wry"),
+            normalize_url("https://example.com", SearchEngine::Google),
+            "https://example.com"
+        );
+        assert_eq!(
+            normalize_url("rust wry", SearchEngine::Google),
             "https://www.google.com/search?q=rust+wry"
         );
         assert_eq!(
-            normalize_url("?rust wry"),
+            normalize_url("?rust wry", SearchEngine::Google),
             "https://www.google.com/search?q=rust+wry"
         );
         assert_eq!(
-            normalize_url("?rust & wry"),
+            normalize_url("?rust & wry", SearchEngine::Google),
             "https://www.google.com/search?q=rust+%26+wry"
         );
         assert_eq!(
-            normalize_url("https://"),
+            normalize_url("https://", SearchEngine::Google),
             "https://www.google.com/search?q=https%3A%2F%2F"
         );
-        assert_eq!(normalize_url("localhost"), "https://localhost");
-        assert_eq!(normalize_url("localhost:3000"), "https://localhost:3000");
-        assert_eq!(normalize_url("127.0.0.1:8080"), "https://127.0.0.1:8080");
+        assert_eq!(
+            normalize_url("localhost", SearchEngine::Google),
+            "https://localhost"
+        );
+        assert_eq!(
+            normalize_url("localhost:3000", SearchEngine::Google),
+            "https://localhost:3000"
+        );
+        assert_eq!(
+            normalize_url("127.0.0.1:8080", SearchEngine::Google),
+            "https://127.0.0.1:8080"
+        );
+    }
+
+    #[test]
+    fn uses_the_selected_search_engine() {
+        assert_eq!(
+            normalize_url("rust wry", SearchEngine::DuckDuckGo),
+            "https://duckduckgo.com/?q=rust+wry"
+        );
+        assert_eq!(
+            normalize_url("rust wry", SearchEngine::Bing),
+            "https://www.bing.com/search?q=rust+wry"
+        );
     }
 
     #[test]
@@ -1432,8 +1525,6 @@ mod tests {
         let cases = [
             (NEW_TAB_URL.to_owned(), "新しいタブ"),
             (mcp_help_url(), "MCPの使い方"),
-            (settings_url(false), "MCP: 無効"),
-            (settings_url(true), "MCP: 有効"),
         ];
 
         for (url, expected_text) in cases {
