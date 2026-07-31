@@ -1,4 +1,11 @@
-import { For, Show, createMemo, createSignal, onMount } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  onMount,
+} from "solid-js";
 import { render } from "solid-js/web";
 import "./styles.css";
 
@@ -16,21 +23,17 @@ type Bookmark = {
   title: string;
 };
 
-type HistoryEntry = {
-  url: string;
-  title: string;
-};
-
 type SearchEngine = "google" | "duckduckgo" | "bing";
+type Theme = "dark" | "light";
 
 type BrowserState = {
   type: "state";
   tabs: Tab[];
   currentTabId: number | null;
   bookmarks: Bookmark[];
-  history: HistoryEntry[];
   settings: {
     searchEngine: SearchEngine;
+    theme: Theme;
   };
 };
 
@@ -52,9 +55,9 @@ const emptyState: BrowserState = {
   tabs: [],
   currentTabId: null,
   bookmarks: [],
-  history: [],
   settings: {
     searchEngine: "google",
+    theme: "dark",
   },
 };
 
@@ -111,6 +114,11 @@ const searchEngines: { value: SearchEngine; label: string; detail: string }[] = 
   { value: "bing", label: "Bing", detail: "bing.com" },
 ];
 
+const themes: { value: Theme; label: string; detail: string }[] = [
+  { value: "dark", label: "Dark", detail: "Dark theme" },
+  { value: "light", label: "Light", detail: "Light theme" },
+];
+
 function App() {
   const [state, setState] = createSignal(emptyState);
   const [locationOpen, setLocationOpen] = createSignal(false);
@@ -136,6 +144,10 @@ function App() {
   const displayedLocationValue = createMemo(() =>
     searchMode() ? locationValue().slice(1) : locationValue(),
   );
+
+  createEffect(() => {
+    document.documentElement.dataset.theme = state().settings.theme;
+  });
 
   const closeLocation = () => {
     if (!locationOpen()) return;
@@ -418,52 +430,6 @@ function App() {
           </Show>
         </section>
 
-        <section class="history-section" aria-label="History">
-          <div class="section-label">
-            <span>History</span>
-            <span class="section-actions">
-              <span>{state().history.length.toString().padStart(2, "0")}</span>
-              <button
-                class="section-action"
-                type="button"
-                aria-label="Clear history"
-                title="Clear history"
-                disabled={state().history.length === 0}
-                onClick={() => send({ type: "clear_history" })}
-              >
-                <Trash />
-              </button>
-            </span>
-          </div>
-          <Show
-            when={state().history.length > 0}
-            fallback={<p class="bookmarks-empty">Visited pages appear here.</p>}
-          >
-            <div class="bookmark-list">
-              <For each={state().history}>
-                {(entry) => (
-                  <button
-                    class="bookmark history-entry"
-                    type="button"
-                    title={entry.url}
-                    onClick={() =>
-                      send({ type: "select_history_entry", url: entry.url })
-                    }
-                  >
-                    <span class="bookmark-mark history-mark"><Clock /></span>
-                    <span class="bookmark-copy">
-                      <span class="bookmark-title">
-                        {displayBookmarkTitle(entry)}
-                      </span>
-                      <span class="bookmark-url">{entry.url}</span>
-                    </span>
-                  </button>
-                )}
-              </For>
-            </div>
-          </Show>
-        </section>
-
         <button
           class="new-tab"
           type="button"
@@ -558,43 +524,113 @@ function App() {
                 <Close />
               </button>
             </header>
-            <div class="settings-group">
-              <div class="settings-copy">
-                <h2>Default search engine</h2>
-                <p>Used when the address bar input is not a URL.</p>
+            <div class="settings-content">
+              <div class="settings-group">
+                <div class="settings-copy">
+                  <h2>Default search engine</h2>
+                  <p>Used when the address bar input is not a URL.</p>
+                </div>
+                <div class="search-engine-options">
+                  <For each={searchEngines}>
+                    {(engine) => (
+                      <label
+                        class="search-engine-option"
+                        classList={{
+                          selected:
+                            state().settings.searchEngine === engine.value,
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name="search-engine"
+                          value={engine.value}
+                          checked={
+                            state().settings.searchEngine === engine.value
+                          }
+                          onChange={() =>
+                            send({
+                              type: "set_search_engine",
+                              engine: engine.value,
+                            })
+                          }
+                        />
+                        <span class="radio-mark" aria-hidden="true" />
+                        <span class="engine-copy">
+                          <strong>{engine.label}</strong>
+                          <span>{engine.detail}</span>
+                        </span>
+                      </label>
+                    )}
+                  </For>
+                </div>
               </div>
-              <div class="search-engine-options">
-                <For each={searchEngines}>
-                  {(engine) => (
-                    <label
-                      class="search-engine-option"
-                      classList={{
-                        selected:
-                          state().settings.searchEngine === engine.value,
-                      }}
-                    >
-                      <input
-                        type="radio"
-                        name="search-engine"
-                        value={engine.value}
-                        checked={
-                          state().settings.searchEngine === engine.value
-                        }
-                        onChange={() =>
-                          send({
-                            type: "set_search_engine",
-                            engine: engine.value,
-                          })
-                        }
-                      />
-                      <span class="radio-mark" aria-hidden="true" />
-                      <span class="engine-copy">
-                        <strong>{engine.label}</strong>
-                        <span>{engine.detail}</span>
-                      </span>
-                    </label>
-                  )}
-                </For>
+
+              <div class="settings-group">
+                <div class="settings-copy">
+                  <h2>Appearance</h2>
+                  <p>Choose the color theme for the browser chrome.</p>
+                </div>
+                <div class="theme-options">
+                  <For each={themes}>
+                    {(theme) => (
+                      <label
+                        class="theme-option"
+                        classList={{
+                          selected: state().settings.theme === theme.value,
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name="theme"
+                          value={theme.value}
+                          checked={state().settings.theme === theme.value}
+                          onChange={() =>
+                            send({
+                              type: "set_theme",
+                              theme: theme.value,
+                            })
+                          }
+                        />
+                        <span class="radio-mark" aria-hidden="true" />
+                        <span class="engine-copy">
+                          <strong>{theme.label}</strong>
+                          <span>{theme.detail}</span>
+                        </span>
+                      </label>
+                    )}
+                  </For>
+                </div>
+              </div>
+
+              <div class="settings-group">
+                <div class="settings-copy">
+                  <h2>Privacy</h2>
+                  <p>Remove browsing information kept by this session.</p>
+                </div>
+                <div class="privacy-actions">
+                  <button
+                    class="privacy-action"
+                    type="button"
+                    onClick={() => send({ type: "clear_history" })}
+                  >
+                    <span>
+                      <strong>Clear history</strong>
+                      <small>Remove the list of visited pages.</small>
+                    </span>
+                    <Trash />
+                  </button>
+                  <button
+                    class="privacy-action"
+                    type="button"
+                    onClick={() => send({ type: "clear_cookies" })}
+                  >
+                    <span>
+                      <strong>Clear cookies</strong>
+                      <small>Clear cookies and browsing data.</small>
+                    </span>
+                    <Cookie />
+                  </button>
+                </div>
               </div>
             </div>
           </section>
@@ -645,12 +681,17 @@ function Gear() {
   );
 }
 
-function Clock() {
-  return <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" /><path d="M10 6.5V10l2.7 1.7" /></svg>;
-}
-
 function Trash() {
   return <svg viewBox="0 0 20 20"><path d="M5.5 6.5h9M8 4.5h4M7 6.5l.5 9h5l.5-9M9 9v4m2-4v4" /></svg>;
+}
+
+function Cookie() {
+  return (
+    <svg viewBox="0 0 20 20">
+      <path d="M16.5 10a6.5 6.5 0 1 1-6.5-6.5 3 3 0 0 0 3 3 3.5 3.5 0 0 0 3.5 3.5Z" />
+      <path d="M7 8h.01M9.5 13h.01M5.5 12h.01" />
+    </svg>
+  );
 }
 
 render(() => <App />, document.getElementById("root")!);
