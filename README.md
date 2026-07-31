@@ -35,12 +35,10 @@ rab-browser/
 前提: Rust(edition 2024)、[pnpm](https://pnpm.io/)。macOS(WKWebView)を主眼に開発している。
 
 ```bash
-# クロームUI(サイドバー等)をビルド。browser-appはこのビルド成果物(base-ui/dist/index.html)を
-# 実行時に読み込むため、コード変更後は毎回ビルドし直す必要がある
-pnpm --dir base-ui install
-pnpm --dir base-ui build
-
-# ブラウザ本体を起動(引数で初期URLを指定可能)
+# ブラウザ本体を起動(引数で初期URLを指定可能)。crates/browser-app/build.rs が
+# cargo build のたびに base-ui/dist/index.html を自動ビルドするため、
+# 手動で pnpm build を叩く必要はない(pnpmがPATHに無い場合はwarningを出して
+# スキップするので、その場合のみ手動で `pnpm --dir base-ui install && pnpm --dir base-ui build` を実行する)
 cargo run -p browser-app -- https://example.com
 ```
 
@@ -64,10 +62,9 @@ cargo run -p browser-app -- https://example.com
 ## テスト・Lint
 
 ```bash
-cargo build --workspace
+cargo build --workspace   # base-ui/dist も自動ビルドされる
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-pnpm --dir base-ui build   # tsc --noEmit + vite build
 ```
 
 ## Git運用
