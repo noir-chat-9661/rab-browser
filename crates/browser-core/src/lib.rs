@@ -158,11 +158,41 @@ impl std::str::FromStr for Theme {
     }
 }
 
+/// Languages supported by the browser chrome.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Locale {
+    #[default]
+    Japanese,
+    English,
+}
+
+impl Locale {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Japanese => "japanese",
+            Self::English => "english",
+        }
+    }
+}
+
+impl std::str::FromStr for Locale {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "japanese" => Ok(Self::Japanese),
+            "english" => Ok(Self::English),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Browser settings kept for the lifetime of the process.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AppSettings {
     pub search_engine: SearchEngine,
     pub theme: Theme,
+    pub locale: Locale,
 }
 
 /// One page in the browser-wide browsing history.
@@ -363,6 +393,7 @@ mod tests {
     fn app_settings_use_expected_defaults() {
         assert_eq!(AppSettings::default().search_engine, SearchEngine::Google);
         assert_eq!(AppSettings::default().theme, Theme::Dark);
+        assert_eq!(AppSettings::default().locale, Locale::Japanese);
     }
 
     #[test]
