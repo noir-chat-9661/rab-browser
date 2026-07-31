@@ -62,7 +62,15 @@ fn which_pnpm() -> Result<(), ()> {
 }
 
 fn run(args: &[&str], dir: &Path, label: &str) {
-    match Command::new("pnpm").args(args).current_dir(dir).status() {
+    // build.rs always runs non-interactively (no TTY). Without CI=1, pnpm's
+    // "confirm modules purge" prompt has nothing to answer and pnpm aborts
+    // instead: https://github.com/pnpm/pnpm/issues (ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY).
+    match Command::new("pnpm")
+        .args(args)
+        .current_dir(dir)
+        .env("CI", "1")
+        .status()
+    {
         Ok(status) if status.success() => {}
         Ok(status) => {
             println!("cargo:warning=base-ui {label} exited with {status}; chrome UI may be stale");
