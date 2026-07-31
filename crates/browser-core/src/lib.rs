@@ -129,10 +129,40 @@ impl std::str::FromStr for SearchEngine {
     }
 }
 
+/// Color themes supported by the browser chrome.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Theme {
+    #[default]
+    Dark,
+    Light,
+}
+
+impl Theme {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Dark => "dark",
+            Self::Light => "light",
+        }
+    }
+}
+
+impl std::str::FromStr for Theme {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "dark" => Ok(Self::Dark),
+            "light" => Ok(Self::Light),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Browser settings kept for the lifetime of the process.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AppSettings {
     pub search_engine: SearchEngine,
+    pub theme: Theme,
 }
 
 /// One page in the browser-wide browsing history.
@@ -330,8 +360,9 @@ mod tests {
     }
 
     #[test]
-    fn app_settings_default_to_google() {
+    fn app_settings_use_expected_defaults() {
         assert_eq!(AppSettings::default().search_engine, SearchEngine::Google);
+        assert_eq!(AppSettings::default().theme, Theme::Dark);
     }
 
     #[test]
