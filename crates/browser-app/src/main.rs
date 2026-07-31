@@ -65,7 +65,6 @@ enum ChromeCommand {
     ToggleBookmark,
     SelectBookmark { url: String },
     RemoveBookmark { url: String },
-    SelectHistoryEntry { url: String },
     ClearHistory,
     ClearCookies,
     SetSearchEngine { engine: String },
@@ -1270,25 +1269,15 @@ fn main() -> wry::Result<()> {
                         ChromeCommand::RemoveBookmark { url } => {
                             bookmarks.remove(&url);
                         }
-                        ChromeCommand::SelectHistoryEntry { url } => {
-                            if let Some(id) = tabs.current_id() {
-                                let url = normalize_url(&url, settings.search_engine);
-                                if let Some(view) = views.get_mut(&id)
-                                    && view.navigate(&url).is_ok()
-                                    && let Some(tab) = tabs.tab_mut(id)
-                                {
-                                    tab.url = url;
-                                    tab.favicon_url = None;
-                                }
-                            }
-                        }
                         ChromeCommand::ClearHistory => {
                             history.clear();
                         }
                         ChromeCommand::ClearCookies => {
-                            if let Some(view) = tabs.current_id().and_then(|id| views.get(&id))
-                                && let Err(error) = view.webview().clear_all_browsing_data()
-                            {
+                            // WKWebView instances share the default website data
+                            // store unless configured otherwise, so clearing via
+                            // the chrome webview affects all tabs and doesn't
+                            // depend on a content tab being open.
+                            if let Err(error) = chrome.clear_all_browsing_data() {
                                 eprintln!("failed to clear browsing data: {error}");
                             }
                         }
