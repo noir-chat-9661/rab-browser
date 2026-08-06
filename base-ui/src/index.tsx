@@ -34,6 +34,11 @@ type BrowserState = {
   currentTabId: number | null;
   bookmarks: Bookmark[];
   mcpEnabled: boolean;
+  mcpHttp: {
+    enabled: boolean;
+    port: number;
+    error: string | null;
+  };
   settings: {
     searchEngine: SearchEngine;
     theme: Theme;
@@ -61,6 +66,11 @@ const emptyState: BrowserState = {
   currentTabId: null,
   bookmarks: [],
   mcpEnabled: false,
+  mcpHttp: {
+    enabled: false,
+    port: 8765,
+    error: null,
+  },
   settings: {
     searchEngine: "google",
     theme: "dark",
@@ -138,6 +148,8 @@ function App() {
   const [settingsCategory, setSettingsCategory] =
     createSignal<SettingsCategory>("language");
   const [locationValue, setLocationValue] = createSignal("");
+  const [mcpHttpPort, setMcpHttpPort] = createSignal("8765");
+  const [mcpHttpPortInvalid, setMcpHttpPortInvalid] = createSignal(false);
   let locationInput: HTMLInputElement | undefined;
   let settingsCloseButton: HTMLButtonElement | undefined;
   let settingsContentPanel: HTMLDivElement | undefined;
@@ -169,11 +181,31 @@ function App() {
   const displayedLocationValue = createMemo(() =>
     searchMode() ? locationValue().slice(1) : locationValue(),
   );
+  const mcpHttpEndpoint = createMemo(
+    () => `http://127.0.0.1:${mcpHttpPort()}/mcp`,
+  );
+
+  const validMcpHttpPort = () => {
+    const port = Number(mcpHttpPort());
+    return Number.isInteger(port) && port >= 1024 && port <= 65535
+      ? port
+      : null;
+  };
+
+  const updateMcpHttp = (enabled: boolean) => {
+    const port = validMcpHttpPort();
+    setMcpHttpPortInvalid(port === null);
+    if (port !== null) send({ type: "set_mcp_http", enabled, port });
+  };
 
   createEffect(() => {
     document.documentElement.dataset.theme = state().settings.theme;
     document.documentElement.lang =
       state().settings.locale === "japanese" ? "ja" : "en";
+  });
+
+  createEffect(() => {
+    setMcpHttpPort(String(state().mcpHttp.port));
   });
 
   const closeLocation = () => {
@@ -748,7 +780,7 @@ function App() {
                     <p class="mcp-overview">{t().mcpOverview}</p>
                     <div class="mcp-info-grid">
                       <div class="mcp-info-block">
-                        <h3>{t().mcpEnablement}</h3>
+                        <h3>{t().mcpStdioMode}</h3>
                         <p>{t().mcpEnablementDescription}</p>
                         <div class="mcp-command-list">
                           <code>rab-browser --mcp</code>
@@ -772,6 +804,60 @@ function App() {
                             : t().mcpDisabledDescription}
                         </p>
                       </div>
+                    </div>
+                    <div class="mcp-http-block">
+                      <div class="mcp-http-heading">
+                        <div>
+                          <h3>{t().mcpHttpToggle}</h3>
+                          <p>{t().mcpHttpDescription}</p>
+                        </div>
+                        <label class="toggle-switch">
+                          <input
+                            type="checkbox"
+                            checked={state().mcpHttp.enabled}
+                            aria-label={t().mcpHttpToggle}
+                            onChange={(event) =>
+                              updateMcpHttp(event.currentTarget.checked)
+                            }
+                          />
+                          <span aria-hidden="true" />
+                        </label>
+                      </div>
+                      <label class="mcp-http-port">
+                        <span>{t().mcpHttpPort}</span>
+                        <input
+                          type="number"
+                          min="1024"
+                          max="65535"
+                          value={mcpHttpPort()}
+                          aria-invalid={mcpHttpPortInvalid()}
+                          onInput={(event) => {
+                            setMcpHttpPort(event.currentTarget.value);
+                            updateMcpHttp(state().mcpHttp.enabled);
+                          }}
+                        />
+                      </label>
+                      <Show when={mcpHttpPortInvalid()}>
+                        <p class="mcp-http-error" role="alert">
+                          {t().mcpHttpPortInvalid}
+                        </p>
+                      </Show>
+                      <div class="mcp-http-endpoint">
+                        <span>{t().mcpHttpEndpoint}</span>
+                        <code>{mcpHttpEndpoint()}</code>
+                      </div>
+                      <div class="mcp-command-list">
+                        <code>
+                          {`claude mcp add --transport http rab-browser ${mcpHttpEndpoint()}`}
+                        </code>
+                      </div>
+                      <Show when={state().mcpHttp.error}>
+                        {(error) => (
+                          <p class="mcp-http-error" role="alert">
+                            <strong>{t().mcpHttpError}:</strong> {error()}
+                          </p>
+                        )}
+                      </Show>
                     </div>
                     <div class="mcp-tools-section">
                       <h3>{t().mcpAvailableTools}</h3>

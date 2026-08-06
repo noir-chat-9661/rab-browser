@@ -53,6 +53,7 @@ export const translations = {
     mcpOverview:
       "MCP（Model Context Protocol）は、AIアシスタントとrab-browserを接続するための共通プロトコルです。タブの操作、ページ内容の取得、クリックや入力などをAIから実行できます。",
     mcpEnablement: "有効化方法",
+    mcpStdioMode: "標準入出力（stdio）方式",
     mcpEnablementDescription:
       "rab-browserの起動時に --mcp フラグを付けるか、環境変数 RAB_MCP=1 を設定してください。",
     mcpStatus: "現在の起動状態",
@@ -60,6 +61,13 @@ export const translations = {
     mcpDisabled: "無効",
     mcpEnabledDescription: "MCPサーバーは標準入出力で接続を待っています。",
     mcpDisabledDescription: "MCPを利用するには、オプションを指定してrab-browserを再起動してください。",
+    mcpHttpToggle: "Streamable HTTPを有効にする",
+    mcpHttpDescription:
+      "起動中のrab-browserへ、ローカルのMCPクライアントから接続できます。stdio方式と同時に利用できます。",
+    mcpHttpPort: "ポート番号",
+    mcpHttpPortInvalid: "1024から65535までのポート番号を入力してください。",
+    mcpHttpEndpoint: "接続URL",
+    mcpHttpError: "Streamable HTTPを開始できませんでした",
     mcpAvailableTools: "利用可能なツール",
     mcpTools: {
       navigate: "アクティブなタブでURLまたは検索語を開きます。",
@@ -129,6 +137,7 @@ export const translations = {
     mcpOverview:
       "MCP (Model Context Protocol) is a common protocol for connecting AI assistants to rab-browser. It lets an AI manage tabs, read page content, click elements, and enter text.",
     mcpEnablement: "How to enable",
+    mcpStdioMode: "Standard I/O (stdio) mode",
     mcpEnablementDescription:
       "Start rab-browser with the --mcp flag or set the RAB_MCP=1 environment variable.",
     mcpStatus: "Current status",
@@ -136,6 +145,13 @@ export const translations = {
     mcpDisabled: "Disabled",
     mcpEnabledDescription: "The MCP server is waiting for a connection over standard I/O.",
     mcpDisabledDescription: "Restart rab-browser with an enablement option to use MCP.",
+    mcpHttpToggle: "Enable Streamable HTTP",
+    mcpHttpDescription:
+      "Connect to the running rab-browser from a local MCP client. This can run alongside stdio mode.",
+    mcpHttpPort: "Port",
+    mcpHttpPortInvalid: "Enter a port number from 1024 to 65535.",
+    mcpHttpEndpoint: "Connection URL",
+    mcpHttpError: "Could not start Streamable HTTP",
     mcpAvailableTools: "Available tools",
     mcpTools: {
       navigate: "Open a URL or search query in the active tab.",

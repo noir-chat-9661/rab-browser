@@ -8,9 +8,13 @@ use rmcp::{
     model::{ServerCapabilities, ServerInfo},
     schemars::{self, JsonSchema},
     tool, tool_handler, tool_router,
+    transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+    },
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 #[cfg(not(test))]
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -362,9 +366,73 @@ pub fn spawn(dispatcher: Arc<dyn RequestDispatcher>) -> JoinHandle<()> {
     })
 }
 
+/// A running Streamable HTTP MCP server.
+pub struct McpHttpHandle {
+    token: CancellationToken,
+    thread: JoinHandle<()>,
+}
+
+impl McpHttpHandle {
+    /// Stops the server and waits for its listener and active sessions to close.
+    pub fn shutdown(self) {
+        self.token.cancel();
+        if self.thread.join().is_err() {
+            eprintln!("rab-browser MCP HTTP server thread panicked during shutdown");
+        }
+    }
+}
+
+/// Starts the Streamable HTTP MCP server on a dedicated current-thread Tokio runtime.
+pub fn spawn_http(
+    dispatcher: Arc<dyn RequestDispatcher>,
+    listener: std::net::TcpListener,
+) -> McpHttpHandle {
+    let token = CancellationToken::new();
+    let server_token = token.clone();
+    let thread = std::thread::spawn(move || {
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                eprintln!("failed to start rab-browser MCP HTTP runtime: {error}");
+                return;
+            }
+        };
+        runtime.block_on(async move {
+            let listener = match tokio::net::TcpListener::from_std(listener) {
+                Ok(listener) => listener,
+                Err(error) => {
+                    eprintln!("failed to configure rab-browser MCP HTTP listener: {error}");
+                    return;
+                }
+            };
+            let service: StreamableHttpService<_, LocalSessionManager> = StreamableHttpService::new(
+                move || Ok(BrowserMcpServer::new(Arc::clone(&dispatcher))),
+                Default::default(),
+                StreamableHttpServerConfig::default().with_cancellation_token(server_token.clone()),
+            );
+            let router = axum::Router::new().nest_service("/mcp", service);
+            if let Err(error) = axum::serve(listener, router)
+                .with_graceful_shutdown(server_token.cancelled_owned())
+                .await
+            {
+                eprintln!("rab-browser MCP HTTP server stopped: {error}");
+            }
+        });
+    });
+
+    McpHttpHandle { token, thread }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        io::{Read, Write},
+        net::{Ipv4Addr, TcpListener, TcpStream},
+        sync::{Arc, Mutex},
+    };
 
     use super::*;
 
@@ -384,6 +452,42 @@ mod tests {
         BrowserMcpServer::new(Arc::new(MockDispatcher {
             handler: Box::new(handler),
         }))
+    }
+
+    fn http_server() -> (std::net::SocketAddr, McpHttpHandle) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let dispatcher = Arc::new(MockDispatcher {
+            handler: Box::new(|_| Err(DispatchError::LoopClosed)),
+        });
+        (address, spawn_http(dispatcher, listener))
+    }
+
+    #[test]
+    fn streamable_http_rejects_an_untrusted_host() {
+        let (address, handle) = http_server();
+        let mut stream = TcpStream::connect(address).unwrap();
+        stream
+            .write_all(b"GET /mcp HTTP/1.1\r\nHost: attacker.example\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        let status = response
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse::<u16>()
+            .unwrap();
+        assert!((400..500).contains(&status), "response was {response:?}");
+        handle.shutdown();
+    }
+
+    #[test]
+    fn streamable_http_shutdown_releases_its_port() {
+        let (address, handle) = http_server();
+        handle.shutdown();
+        TcpListener::bind(address).unwrap();
     }
 
     #[tokio::test]

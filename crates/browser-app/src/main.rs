@@ -2,6 +2,7 @@ use std::{
     cell::Cell,
     collections::BTreeMap,
     env, fs,
+    net::{Ipv4Addr, TcpListener},
     rc::Rc,
     sync::{
         Arc, Mutex,
@@ -14,7 +15,7 @@ use browser_core::{
     TabManager, Theme,
 };
 use browser_engine_wry::WryEngine;
-use browser_mcp_server::{DispatchError, McpRequest, RequestDispatcher, TabInfo};
+use browser_mcp_server::{DispatchError, McpHttpHandle, McpRequest, RequestDispatcher, TabInfo};
 #[cfg(target_os = "macos")]
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 #[cfg(target_os = "macos")]
@@ -70,6 +71,7 @@ enum ChromeCommand {
     ClearCookies,
     SetSearchEngine { engine: String },
     SetTheme { theme: String },
+    SetMcpHttp { enabled: bool, port: u16 },
     SetLocale { locale: String },
     FaviconChanged { url: String },
     OpenDevtools,
@@ -94,7 +96,26 @@ struct ChromeState<'a> {
     current_tab_id: Option<u64>,
     bookmarks: Vec<ChromeBookmark<'a>>,
     mcp_enabled: bool,
+    mcp_http: &'a McpHttpState,
     settings: ChromeSettings<'a>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct McpHttpState {
+    enabled: bool,
+    port: u16,
+    error: Option<String>,
+}
+
+impl Default for McpHttpState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 8765,
+            error: None,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -571,6 +592,7 @@ fn send_state(
     bookmarks: &BookmarkManager,
     settings: &AppSettings,
     mcp_enabled: bool,
+    mcp_http: &McpHttpState,
 ) {
     let state = ChromeState {
         r#type: "state",
@@ -594,6 +616,7 @@ fn send_state(
             })
             .collect(),
         mcp_enabled,
+        mcp_http,
         settings: ChromeSettings {
             search_engine: settings.search_engine.as_str(),
             theme: settings.theme.as_str(),
@@ -812,6 +835,7 @@ fn handle_mcp_request(
     theme: &Rc<Cell<Theme>>,
     sidebar_visible: bool,
     mcp_enabled: bool,
+    mcp_http_state: &McpHttpState,
 ) {
     match request {
         McpRequest::Wake => {}
@@ -843,7 +867,14 @@ fn handle_mcp_request(
             ) {
                 Ok(id) => {
                     bring_chrome_to_front(chrome);
-                    send_state(chrome, tabs, bookmarks, settings, mcp_enabled);
+                    send_state(
+                        chrome,
+                        tabs,
+                        bookmarks,
+                        settings,
+                        mcp_enabled,
+                        mcp_http_state,
+                    );
                     let _ = reply.send(id.get());
                 }
                 Err(error) => {
@@ -872,7 +903,14 @@ fn handle_mcp_request(
             if result == CloseTabResult::CreatedReplacement {
                 bring_chrome_to_front(chrome);
             }
-            send_state(chrome, tabs, bookmarks, settings, mcp_enabled);
+            send_state(
+                chrome,
+                tabs,
+                bookmarks,
+                settings,
+                mcp_enabled,
+                mcp_http_state,
+            );
             let _ = reply.send(result != CloseTabResult::Ignored);
         }
         McpRequest::SelectTab { id, reply } => {
@@ -881,7 +919,14 @@ fn handle_mcp_request(
                 true
             });
             if selected {
-                send_state(chrome, tabs, bookmarks, settings, mcp_enabled);
+                send_state(
+                    chrome,
+                    tabs,
+                    bookmarks,
+                    settings,
+                    mcp_enabled,
+                    mcp_http_state,
+                );
             }
             let _ = reply.send(selected);
         }
@@ -900,7 +945,14 @@ fn handle_mcp_request(
                     tab.url = url;
                     tab.favicon_url = None;
                 }
-                send_state(chrome, tabs, bookmarks, settings, mcp_enabled);
+                send_state(
+                    chrome,
+                    tabs,
+                    bookmarks,
+                    settings,
+                    mcp_enabled,
+                    mcp_http_state,
+                );
             }
             let _ = reply.send(result);
         }
@@ -912,7 +964,14 @@ fn handle_mcp_request(
                         let _ = view.go_back();
                     }
                     update_history_flags(tabs, histories, id);
-                    send_state(chrome, tabs, bookmarks, settings, mcp_enabled);
+                    send_state(
+                        chrome,
+                        tabs,
+                        bookmarks,
+                        settings,
+                        mcp_enabled,
+                        mcp_http_state,
+                    );
                 }
                 moved
             });
@@ -926,7 +985,14 @@ fn handle_mcp_request(
                         let _ = view.go_forward();
                     }
                     update_history_flags(tabs, histories, id);
-                    send_state(chrome, tabs, bookmarks, settings, mcp_enabled);
+                    send_state(
+                        chrome,
+                        tabs,
+                        bookmarks,
+                        settings,
+                        mcp_enabled,
+                        mcp_http_state,
+                    );
                 }
                 moved
             });
@@ -1039,13 +1105,17 @@ fn main() -> wry::Result<()> {
         .build_as_child(&window)?;
     chrome.set_bounds(chrome_bounds(&window))?;
 
+    let dispatcher: Arc<dyn RequestDispatcher> =
+        Arc::new(ProxyDispatcher(event_loop.create_proxy()));
     if mcp_enabled {
-        browser_mcp_server::spawn(Arc::new(ProxyDispatcher(event_loop.create_proxy())));
+        browser_mcp_server::spawn(Arc::clone(&dispatcher));
         eprintln!("rab-browser MCP server enabled on stdio");
     }
 
     let mut modifiers = ModifiersState::empty();
     let mut palette_open = false;
+    let mut mcp_http: Option<McpHttpHandle> = None;
+    let mut mcp_http_state = McpHttpState::default();
     event_loop.run(move |event, _, control_flow| {
         #[cfg(target_os = "macos")]
         // Keep the monitor token with the event loop so its registration has the
@@ -1070,6 +1140,7 @@ fn main() -> wry::Result<()> {
                 &current_theme,
                 sidebar_visible,
                 mcp_enabled,
+                &mcp_http_state,
             ),
             Event::MainEventsCleared => {
                 for event in content_events_rx.try_iter() {
@@ -1105,7 +1176,14 @@ fn main() -> wry::Result<()> {
                             }
                         }
                     }
-                    send_state(&chrome, &tabs, &bookmarks, &settings, mcp_enabled);
+                    send_state(
+                        &chrome,
+                        &tabs,
+                        &bookmarks,
+                        &settings,
+                        mcp_enabled,
+                        &mcp_http_state,
+                    );
                 }
 
                 for raw_command in commands_rx.try_iter() {
@@ -1135,7 +1213,14 @@ fn main() -> wry::Result<()> {
                             .is_ok()
                             {
                                 bring_chrome_to_front(&chrome);
-                                send_state(&chrome, &tabs, &bookmarks, &settings, mcp_enabled);
+                                send_state(
+                                    &chrome,
+                                    &tabs,
+                                    &bookmarks,
+                                    &settings,
+                                    mcp_enabled,
+                                    &mcp_http_state,
+                                );
                                 focus_location(&window, &chrome, &mut palette_open);
                             }
                         }
@@ -1301,6 +1386,40 @@ fn main() -> wry::Result<()> {
                                 current_theme.set(theme);
                             }
                         }
+                        ChromeCommand::SetMcpHttp { enabled, port } => {
+                            if let Some(handle) = mcp_http.take() {
+                                handle.shutdown();
+                            }
+                            mcp_http_state = McpHttpState {
+                                enabled: false,
+                                port,
+                                error: None,
+                            };
+                            if enabled {
+                                match TcpListener::bind((Ipv4Addr::LOCALHOST, port)).and_then(
+                                    |listener| {
+                                        listener.set_nonblocking(true)?;
+                                        Ok(listener)
+                                    },
+                                ) {
+                                    Ok(listener) => {
+                                        mcp_http = Some(browser_mcp_server::spawn_http(
+                                            Arc::clone(&dispatcher),
+                                            listener,
+                                        ));
+                                        mcp_http_state.enabled = true;
+                                        eprintln!(
+                                            "rab-browser MCP server enabled at http://127.0.0.1:{port}/mcp"
+                                        );
+                                    }
+                                    Err(error) => {
+                                        mcp_http_state.error = Some(format!(
+                                            "failed to listen on 127.0.0.1:{port}: {error}"
+                                        ));
+                                    }
+                                }
+                            }
+                        }
                         ChromeCommand::SetLocale { locale } => {
                             if let Ok(locale) = locale.parse::<Locale>() {
                                 settings.locale = locale;
@@ -1337,7 +1456,14 @@ fn main() -> wry::Result<()> {
                             }
                         }
                     }
-                    send_state(&chrome, &tabs, &bookmarks, &settings, mcp_enabled);
+                    send_state(
+                        &chrome,
+                        &tabs,
+                        &bookmarks,
+                        &settings,
+                        mcp_enabled,
+                        &mcp_http_state,
+                    );
                 }
             }
             Event::WindowEvent { event, .. } => match event {
@@ -1368,7 +1494,14 @@ fn main() -> wry::Result<()> {
                             )
                             .is_ok() =>
                         {
-                            send_state(&chrome, &tabs, &bookmarks, &settings, mcp_enabled);
+                            send_state(
+                                &chrome,
+                                &tabs,
+                                &bookmarks,
+                                &settings,
+                                mcp_enabled,
+                                &mcp_http_state,
+                            );
                             bring_chrome_to_front(&chrome);
                             focus_location(&window, &chrome, &mut palette_open);
                         }
@@ -1416,7 +1549,14 @@ fn main() -> wry::Result<()> {
                                 if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
                                 }
-                                send_state(&chrome, &tabs, &bookmarks, &settings, mcp_enabled);
+                                send_state(
+                                    &chrome,
+                                    &tabs,
+                                    &bookmarks,
+                                    &settings,
+                                    mcp_enabled,
+                                    &mcp_http_state,
+                                );
                             }
                         }
                         KeyCode::KeyI if modifiers.alt_key() => {
@@ -1430,6 +1570,11 @@ fn main() -> wry::Result<()> {
                 WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
                 _ => {}
             },
+            Event::LoopDestroyed => {
+                if let Some(handle) = mcp_http.take() {
+                    handle.shutdown();
+                }
+            }
             _ => {}
         }
     });
