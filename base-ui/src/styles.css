@@ -1271,7 +1271,8 @@ kbd {
 
 @media (prefers-reduced-motion: reduce) {
   .command-palette,
-  .settings-panel {
+  .settings-panel,
+  .confirm-dialog {
     animation: none;
   }
 }

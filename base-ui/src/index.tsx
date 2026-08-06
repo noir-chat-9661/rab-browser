@@ -157,19 +157,41 @@ function App() {
   let locationInput: HTMLInputElement | undefined;
   let settingsCloseButton: HTMLButtonElement | undefined;
   let settingsContentPanel: HTMLDivElement | undefined;
+  let confirmCancelButton: HTMLButtonElement | undefined;
+  let confirmOkButton: HTMLButtonElement | undefined;
+  let confirmDialogPreviouslyFocused: HTMLElement | null = null;
   const t = createMemo(() => translations[state().settings.locale]);
 
   // wry's WKUIDelegate does not implement the JS confirm/alert panels, so
   // window.confirm() silently no-ops on macOS. Use an in-app modal instead.
   const requestConfirm = (message: string, onConfirm: () => void) => {
+    confirmDialogPreviouslyFocused = document.activeElement as HTMLElement | null;
     setConfirmDialog({ message, onConfirm });
+    // Default focus to Cancel, not the destructive action, so an accidental
+    // Enter/Space press doesn't confirm the deletion.
+    queueMicrotask(() => confirmCancelButton?.focus());
   };
-  const closeConfirmDialog = () => setConfirmDialog(null);
+  const closeConfirmDialog = () => {
+    setConfirmDialog(null);
+    confirmDialogPreviouslyFocused?.focus();
+    confirmDialogPreviouslyFocused = null;
+  };
   const acceptConfirmDialog = () => {
     const dialog = confirmDialog();
     if (!dialog) return;
     closeConfirmDialog();
     dialog.onConfirm();
+  };
+  const trapConfirmDialogTab = (event: KeyboardEvent) => {
+    // Only two focusable elements in this dialog, so Tab and Shift+Tab both
+    // just toggle between them, keeping focus from escaping to the page
+    // behind the modal.
+    if (event.key !== "Tab") return;
+    event.preventDefault();
+    (document.activeElement === confirmCancelButton
+      ? confirmOkButton
+      : confirmCancelButton
+    )?.focus();
   };
 
   const selectSettingsCategory = (category: SettingsCategory) => {
@@ -937,19 +959,26 @@ function App() {
               class="confirm-dialog"
               role="alertdialog"
               aria-modal="true"
+              aria-label={t().confirmDialogTitle}
               aria-describedby="confirm-dialog-message"
+              onKeyDown={trapConfirmDialogTab}
               onClick={(event) => event.stopPropagation()}
             >
               <p id="confirm-dialog-message">{dialog().message}</p>
               <div class="confirm-dialog-actions">
-                <button type="button" class="confirm-dialog-cancel" onClick={closeConfirmDialog}>
+                <button
+                  ref={confirmCancelButton}
+                  type="button"
+                  class="confirm-dialog-cancel"
+                  onClick={closeConfirmDialog}
+                >
                   {t().confirmDialogCancel}
                 </button>
                 <button
+                  ref={confirmOkButton}
                   type="button"
                   class="confirm-dialog-ok"
                   onClick={acceptConfirmDialog}
-                  ref={(el) => queueMicrotask(() => el.focus())}
                 >
                   {t().confirmDialogOk}
                 </button>
