@@ -211,6 +211,7 @@ impl WryEngine {
             .with_url(url)
             .with_user_agent(MODERN_USER_AGENT)
             .with_devtools(true)
+            .with_back_forward_navigation_gestures(true)
             .with_document_title_changed_handler(on_title_changed)
             .with_on_page_load_handler(on_page_load)
             .with_ipc_handler(on_ipc);
@@ -264,6 +265,16 @@ impl BrowserEngine for WryEngine {
     fn navigate(&mut self, url: &str) -> Result<(), BrowserError> {
         self.webview
             .load_url(url)
+            .map_err(|error| BrowserError::new(error.to_string()))
+    }
+
+    fn navigate_replacing(&mut self, url: &str) -> Result<(), BrowserError> {
+        // `location.replace` performs the navigation without pushing a new
+        // entry onto WKWebView's native back/forward list, unlike `load_url`.
+        let encoded_url =
+            serde_json::to_string(url).map_err(|error| BrowserError::new(error.to_string()))?;
+        self.webview
+            .evaluate_script(&format!("location.replace({encoded_url})"))
             .map_err(|error| BrowserError::new(error.to_string()))
     }
 
