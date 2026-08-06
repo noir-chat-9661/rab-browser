@@ -936,10 +936,18 @@ fn handle_mcp_request(
                 return;
             };
             let url = normalize_url(&url, settings.search_engine);
+            let leaving_new_tab = tabs.tab(id).is_some_and(|tab| is_new_tab_url(&tab.url));
             let result = views
                 .get_mut(&id)
                 .ok_or_else(|| "active tab has no content view".to_owned())
-                .and_then(|view| view.navigate(&url).map_err(|error| error.to_string()));
+                .and_then(|view| {
+                    if leaving_new_tab {
+                        view.navigate_replacing(&url)
+                    } else {
+                        view.navigate(&url)
+                    }
+                    .map_err(|error| error.to_string())
+                });
             if result.is_ok() {
                 if let Some(tab) = tabs.tab_mut(id) {
                     tab.url = url;
@@ -1266,8 +1274,17 @@ fn main() -> wry::Result<()> {
                         ChromeCommand::Navigate { url } => {
                             if let Some(id) = tabs.current_id() {
                                 let url = normalize_url(&url, settings.search_engine);
-                                if let Some(view) = views.get_mut(&id)
-                                    && view.navigate(&url).is_ok()
+                                let leaving_new_tab =
+                                    tabs.tab(id).is_some_and(|tab| is_new_tab_url(&tab.url));
+                                let navigated = views.get_mut(&id).is_some_and(|view| {
+                                    if leaving_new_tab {
+                                        view.navigate_replacing(&url)
+                                    } else {
+                                        view.navigate(&url)
+                                    }
+                                    .is_ok()
+                                });
+                                if navigated
                                     && let Some(tab) = tabs.tab_mut(id)
                                 {
                                     tab.url = url;
@@ -1352,8 +1369,17 @@ fn main() -> wry::Result<()> {
                         ChromeCommand::SelectBookmark { url } => {
                             if let Some(id) = tabs.current_id() {
                                 let url = normalize_url(&url, settings.search_engine);
-                                if let Some(view) = views.get_mut(&id)
-                                    && view.navigate(&url).is_ok()
+                                let leaving_new_tab =
+                                    tabs.tab(id).is_some_and(|tab| is_new_tab_url(&tab.url));
+                                let navigated = views.get_mut(&id).is_some_and(|view| {
+                                    if leaving_new_tab {
+                                        view.navigate_replacing(&url)
+                                    } else {
+                                        view.navigate(&url)
+                                    }
+                                    .is_ok()
+                                });
+                                if navigated
                                     && let Some(tab) = tabs.tab_mut(id)
                                 {
                                     tab.url = url;

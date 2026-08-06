@@ -268,6 +268,16 @@ impl BrowserEngine for WryEngine {
             .map_err(|error| BrowserError::new(error.to_string()))
     }
 
+    fn navigate_replacing(&mut self, url: &str) -> Result<(), BrowserError> {
+        // `location.replace` performs the navigation without pushing a new
+        // entry onto WKWebView's native back/forward list, unlike `load_url`.
+        let encoded_url =
+            serde_json::to_string(url).map_err(|error| BrowserError::new(error.to_string()))?;
+        self.webview
+            .evaluate_script(&format!("location.replace({encoded_url})"))
+            .map_err(|error| BrowserError::new(error.to_string()))
+    }
+
     fn go_back(&mut self) -> Result<(), BrowserError> {
         self.webview
             .evaluate_script("history.back()")
