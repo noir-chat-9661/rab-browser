@@ -261,6 +261,10 @@ impl HistoryManager {
 /// The small engine surface needed by the first browser shell.
 pub trait BrowserEngine {
     fn navigate(&mut self, url: &str) -> Result<(), BrowserError>;
+    /// Navigates without adding a new entry to the engine's native
+    /// back/forward history, so the replaced page can't be reached again by
+    /// going back (e.g. leaving the new-tab placeholder for a real page).
+    fn navigate_replacing(&mut self, url: &str) -> Result<(), BrowserError>;
     fn go_back(&mut self) -> Result<(), BrowserError>;
     fn go_forward(&mut self) -> Result<(), BrowserError>;
     fn reload(&mut self) -> Result<(), BrowserError>;
