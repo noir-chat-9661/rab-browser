@@ -9,6 +9,15 @@ use wry::{
     http::{Request, Response},
 };
 
+#[cfg(target_os = "macos")]
+mod macos_js_dialogs;
+
+#[cfg(target_os = "macos")]
+pub use macos_js_dialogs::{RabUIDelegate, install_js_dialog_delegate};
+
+#[cfg(not(target_os = "macos"))]
+pub fn install_js_dialog_delegate(_: &wry::WebView) {}
+
 /// WKWebView's default UA string doesn't match a released Safari version, so
 /// some sites (e.g. Google Search) serve stale/legacy markup. Present as a
 /// current Safari on macOS instead.
@@ -110,8 +119,17 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
 "#;
 
 pub struct WryEngine {
+    // Fields drop in declaration order, so the webview releases its weak
+    // UIDelegate reference before the retained delegate is dropped.
     webview: WebView,
+    _ui_delegate: InstallJsDialogDelegateResult,
 }
+
+#[cfg(target_os = "macos")]
+type InstallJsDialogDelegateResult = Option<objc2::rc::Retained<RabUIDelegate>>;
+
+#[cfg(not(target_os = "macos"))]
+type InstallJsDialogDelegateResult = ();
 
 type CustomProtocolHandler = Box<dyn Fn(Request<Vec<u8>>) -> Response<Vec<u8>>>;
 
@@ -205,7 +223,11 @@ impl WryEngine {
             builder = builder.with_bounds(bounds);
         }
         let webview = builder.build_as_child(window)?;
-        Ok(Self { webview })
+        let ui_delegate = install_js_dialog_delegate(&webview);
+        Ok(Self {
+            webview,
+            _ui_delegate: ui_delegate,
+        })
     }
 
     pub fn set_bounds(&self, bounds: Rect) -> Result<(), wry::Error> {
