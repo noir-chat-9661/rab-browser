@@ -211,6 +211,7 @@ impl WryEngine {
             .with_url(url)
             .with_user_agent(MODERN_USER_AGENT)
             .with_devtools(true)
+            .with_back_forward_navigation_gestures(true)
             .with_document_title_changed_handler(on_title_changed)
             .with_on_page_load_handler(on_page_load)
             .with_ipc_handler(on_ipc);
