@@ -59,6 +59,16 @@ cargo run -p browser-app -- https://example.com
 `Cmd+Option+I`、Windows/Linuxでは`Ctrl+Alt+I`、または
 右クリックの「要素を検証」から開ける。
 
+### MCPサーバー
+
+設定パネルのMCPカテゴリでStreamable HTTPを有効にすると、
+`http://127.0.0.1:8765/mcp`で接続を待ち受ける。ポート番号は設定パネルで変更できる。
+従来の`--mcp`フラグまたは`RAB_MCP=1`によるstdio方式とは独立しており、両方を同時に利用できる。
+
+Streamable HTTPはローカルホストのみにbindし、DNS rebinding対策としてHostヘッダーも
+loopbackホストに制限している。ただし認証はないため、同じマシン上のすべてのプロセスが
+ブラウザを操作できる。信頼できないプロセスが動作している環境では有効にしないこと。
+
 ## テスト・Lint
 
 ```bash

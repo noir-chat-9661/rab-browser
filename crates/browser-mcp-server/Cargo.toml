@@ -6,7 +6,9 @@ publish = false
 
 [dependencies]
 anyhow = "1"
-rmcp = { version = "3.0.0-beta.2", features = ["macros", "server", "transport-io"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+rmcp = { version = "3.0.0-beta.2", features = ["macros", "server", "tower", "transport-io", "transport-streamable-http-server"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
+tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
