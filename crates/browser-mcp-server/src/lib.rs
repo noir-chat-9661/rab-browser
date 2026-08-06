@@ -464,22 +464,31 @@ mod tests {
         (address, spawn_http(dispatcher, listener))
     }
 
-    #[test]
-    fn streamable_http_rejects_an_untrusted_host() {
-        let (address, handle) = http_server();
+    fn http_status(address: std::net::SocketAddr, host: &str) -> u16 {
         let mut stream = TcpStream::connect(address).unwrap();
         stream
-            .write_all(b"GET /mcp HTTP/1.1\r\nHost: attacker.example\r\nConnection: close\r\n\r\n")
+            .write_all(
+                format!(
+                    "GET /mcp HTTP/1.1\r\nHost: {host}\r\nAccept: application/json, text/event-stream\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
+            )
             .unwrap();
         let mut response = String::new();
         stream.read_to_string(&mut response).unwrap();
-        let status = response
+        response
             .split_whitespace()
             .nth(1)
             .unwrap()
             .parse::<u16>()
-            .unwrap();
-        assert!((400..500).contains(&status), "response was {response:?}");
+            .unwrap()
+    }
+
+    #[test]
+    fn streamable_http_rejects_an_untrusted_host() {
+        let (address, handle) = http_server();
+        assert_eq!(http_status(address, "attacker.example"), 403);
+        assert_ne!(http_status(address, &address.to_string()), 403);
         handle.shutdown();
     }
 

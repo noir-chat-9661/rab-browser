@@ -1388,7 +1388,10 @@ fn main() -> wry::Result<()> {
                         }
                         ChromeCommand::SetMcpHttp { enabled, port } => {
                             if let Some(handle) = mcp_http.take() {
-                                handle.shutdown();
+                                // Graceful shutdown waits for in-flight requests to finish,
+                                // which can take a moment; run it off the GUI event loop
+                                // thread so the UI doesn't freeze while it completes.
+                                std::thread::spawn(move || handle.shutdown());
                             }
                             mcp_http_state = McpHttpState {
                                 enabled: false,

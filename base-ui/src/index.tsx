@@ -193,6 +193,14 @@ function App() {
   };
 
   const updateMcpHttp = (enabled: boolean) => {
+    if (!enabled) {
+      // Disabling must always go through, even if the port field currently
+      // holds a draft/invalid value — otherwise a running server could be
+      // stranded with no way to turn it off from the UI.
+      setMcpHttpPortInvalid(false);
+      send({ type: "set_mcp_http", enabled: false, port: state().mcpHttp.port });
+      return;
+    }
     const port = validMcpHttpPort();
     setMcpHttpPortInvalid(port === null);
     if (port !== null) send({ type: "set_mcp_http", enabled, port });
@@ -833,7 +841,11 @@ function App() {
                           aria-invalid={mcpHttpPortInvalid()}
                           onInput={(event) => {
                             setMcpHttpPort(event.currentTarget.value);
-                            updateMcpHttp(state().mcpHttp.enabled);
+                            if (state().mcpHttp.enabled) {
+                              updateMcpHttp(true);
+                            } else {
+                              setMcpHttpPortInvalid(validMcpHttpPort() === null);
+                            }
                           }}
                         />
                       </label>
