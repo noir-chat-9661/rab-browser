@@ -140,7 +140,17 @@ function App() {
   const [locationValue, setLocationValue] = createSignal("");
   let locationInput: HTMLInputElement | undefined;
   let settingsCloseButton: HTMLButtonElement | undefined;
+  let settingsContentPanel: HTMLDivElement | undefined;
   const t = createMemo(() => translations[state().settings.locale]);
+
+  const selectSettingsCategory = (category: SettingsCategory) => {
+    setSettingsCategory(category);
+    // Move focus into the newly shown panel so switching category doesn't
+    // strand keyboard/screen-reader focus on an unmounted element.
+    queueMicrotask(() => {
+      settingsContentPanel?.focus();
+    });
+  };
 
   const currentTab = createMemo(() =>
     state().tabs.find((tab) => tab.id === state().currentTabId),
@@ -548,7 +558,7 @@ function App() {
               </button>
             </header>
             <div class="settings-layout">
-              <nav class="settings-nav" aria-label={t().settings}>
+              <nav class="settings-nav" role="tablist" aria-label={t().settings}>
                 <For
                   each={[
                     { id: "language" as const, label: t().language },
@@ -563,8 +573,11 @@ function App() {
                       class="settings-nav-item"
                       classList={{ active: settingsCategory() === category.id }}
                       type="button"
-                      aria-current={settingsCategory() === category.id ? "page" : undefined}
-                      onClick={() => setSettingsCategory(category.id)}
+                      role="tab"
+                      id={`settings-tab-${category.id}`}
+                      aria-selected={settingsCategory() === category.id}
+                      aria-controls="settings-content-panel"
+                      onClick={() => selectSettingsCategory(category.id)}
                     >
                       <span class="settings-nav-index">
                         {(index() + 1).toString().padStart(2, "0")}
@@ -575,7 +588,14 @@ function App() {
                 </For>
               </nav>
 
-              <div class="settings-content">
+              <div
+                class="settings-content"
+                id="settings-content-panel"
+                role="tabpanel"
+                tabindex="-1"
+                aria-labelledby={`settings-tab-${settingsCategory()}`}
+                ref={settingsContentPanel}
+              >
                 <Show when={settingsCategory() === "language"}>
                   <section class="settings-category-panel">
                     <header class="settings-category-header">
