@@ -35,7 +35,6 @@ use wry::{
 };
 
 const SIDEBAR_WIDTH: f64 = 264.0;
-const MCP_SKILL: &str = include_str!("../../../skills/rab-browser-mcp/SKILL.md");
 const INTERNAL_PROTOCOL: &str = "rab";
 const NEW_TAB_URL: &str = "rab://newtab/";
 
@@ -94,6 +93,7 @@ struct ChromeState<'a> {
     tabs: Vec<ChromeTab<'a>>,
     current_tab_id: Option<u64>,
     bookmarks: Vec<ChromeBookmark<'a>>,
+    mcp_enabled: bool,
     settings: ChromeSettings<'a>,
 }
 
@@ -244,52 +244,6 @@ fn chrome_html(theme: Theme) -> String {
     })
 }
 
-fn escape_html(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-
-fn internal_page_url(page: &str) -> String {
-    format!("{INTERNAL_PROTOCOL}://{page}/")
-}
-
-fn internal_page_html(title: &str, content: &str, theme: Theme) -> String {
-    let (color_scheme, background, text, accent, muted, control, border, heading) = match theme {
-        Theme::Dark => (
-            "dark", "#171816", "#e9e9e3", "#d6ff72", "#a2a59d", "#1e201d", "#343630", "#dfe0d8",
-        ),
-        Theme::Light => (
-            "light", "#f3f2eb", "#292a25", "#58751c", "#60645a", "#faf9f4", "#d2d3c8", "#30322c",
-        ),
-    };
-    format!(
-        "<!doctype html><html lang=\"ja\"><head><meta charset=\"utf-8\">\
-         <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-         <title>{}</title><style>\
-         :root{{color-scheme:{color_scheme};font-family:\"Avenir Next\",Avenir,\"Helvetica Neue\",sans-serif}}\
-         body{{margin:0;padding:48px;background:{background};color:{text}}}\
-         main{{max-width:880px;margin:0 auto}}\
-         h1{{margin:0 0 12px;color:{accent};font-size:24px}}\
-         p{{color:{muted};line-height:1.7}}\
-         pre{{overflow:auto;padding:20px;color:{heading};background:{control};\
-         border:1px solid {border};border-radius:4px;font:12px/1.7 \"SFMono-Regular\",Consolas,monospace;\
-         white-space:pre-wrap;word-break:break-word}}\
-         code{{color:{accent}}}\
-         </style></head><body><main><h1>{}</h1>{}</main></body></html>",
-        escape_html(title),
-        escape_html(title),
-        content
-    )
-}
-
-fn mcp_help_url() -> String {
-    internal_page_url("help")
-}
-
 fn internal_page_response(request: Request<Vec<u8>>, theme: Theme) -> Response<Vec<u8>> {
     let uri = request.uri();
     let html = match (uri.host(), uri.path()) {
@@ -307,11 +261,6 @@ fn internal_page_response(request: Request<Vec<u8>>, theme: Theme) -> Response<V
                  </head><body>新しいタブ</body></html>"
             )
         }
-        (Some("help"), "/") => internal_page_html(
-            "MCPの使い方",
-            &format!("<pre>{}</pre>", escape_html(MCP_SKILL)),
-            theme,
-        ),
         _ => {
             return Response::builder()
                 .status(404)
@@ -621,6 +570,7 @@ fn send_state(
     tabs: &TabManager,
     bookmarks: &BookmarkManager,
     settings: &AppSettings,
+    mcp_enabled: bool,
 ) {
     let state = ChromeState {
         r#type: "state",
@@ -643,6 +593,7 @@ fn send_state(
                 title: &bookmark.title,
             })
             .collect(),
+        mcp_enabled,
         settings: ChromeSettings {
             search_engine: settings.search_engine.as_str(),
             theme: settings.theme.as_str(),
@@ -784,6 +735,15 @@ fn open_settings(window: &Window, chrome: &WebView, palette_open: &mut bool) {
     let _ = chrome.evaluate_script("window.rabChrome?.openSettings();");
 }
 
+fn open_mcp_help(window: &Window, chrome: &WebView, palette_open: &mut bool) {
+    *palette_open = true;
+    let _ = chrome.set_visible(true);
+    let _ = chrome.set_bounds(full_window_bounds(window));
+    bring_chrome_to_front(chrome);
+    let _ = chrome.focus();
+    let _ = chrome.evaluate_script("window.rabChrome?.openMcpHelp();");
+}
+
 fn mcp_env_enabled() -> bool {
     env::var("RAB_MCP").is_ok_and(|value| {
         !matches!(
@@ -851,6 +811,7 @@ fn handle_mcp_request(
     commands_tx: &Sender<String>,
     theme: &Rc<Cell<Theme>>,
     sidebar_visible: bool,
+    mcp_enabled: bool,
 ) {
     match request {
         McpRequest::Wake => {}
@@ -882,7 +843,7 @@ fn handle_mcp_request(
             ) {
                 Ok(id) => {
                     bring_chrome_to_front(chrome);
-                    send_state(chrome, tabs, bookmarks, settings);
+                    send_state(chrome, tabs, bookmarks, settings, mcp_enabled);
                     let _ = reply.send(id.get());
                 }
                 Err(error) => {
@@ -911,7 +872,7 @@ fn handle_mcp_request(
             if result == CloseTabResult::CreatedReplacement {
                 bring_chrome_to_front(chrome);
             }
-            send_state(chrome, tabs, bookmarks, settings);
+            send_state(chrome, tabs, bookmarks, settings, mcp_enabled);
             let _ = reply.send(result != CloseTabResult::Ignored);
         }
         McpRequest::SelectTab { id, reply } => {
@@ -920,7 +881,7 @@ fn handle_mcp_request(
                 true
             });
             if selected {
-                send_state(chrome, tabs, bookmarks, settings);
+                send_state(chrome, tabs, bookmarks, settings, mcp_enabled);
             }
             let _ = reply.send(selected);
         }
@@ -939,7 +900,7 @@ fn handle_mcp_request(
                     tab.url = url;
                     tab.favicon_url = None;
                 }
-                send_state(chrome, tabs, bookmarks, settings);
+                send_state(chrome, tabs, bookmarks, settings, mcp_enabled);
             }
             let _ = reply.send(result);
         }
@@ -951,7 +912,7 @@ fn handle_mcp_request(
                         let _ = view.go_back();
                     }
                     update_history_flags(tabs, histories, id);
-                    send_state(chrome, tabs, bookmarks, settings);
+                    send_state(chrome, tabs, bookmarks, settings, mcp_enabled);
                 }
                 moved
             });
@@ -965,7 +926,7 @@ fn handle_mcp_request(
                         let _ = view.go_forward();
                     }
                     update_history_flags(tabs, histories, id);
-                    send_state(chrome, tabs, bookmarks, settings);
+                    send_state(chrome, tabs, bookmarks, settings, mcp_enabled);
                 }
                 moved
             });
@@ -1108,6 +1069,7 @@ fn main() -> wry::Result<()> {
                 &commands_tx,
                 &current_theme,
                 sidebar_visible,
+                mcp_enabled,
             ),
             Event::MainEventsCleared => {
                 for event in content_events_rx.try_iter() {
@@ -1143,7 +1105,7 @@ fn main() -> wry::Result<()> {
                             }
                         }
                     }
-                    send_state(&chrome, &tabs, &bookmarks, &settings);
+                    send_state(&chrome, &tabs, &bookmarks, &settings, mcp_enabled);
                 }
 
                 for raw_command in commands_rx.try_iter() {
@@ -1173,7 +1135,7 @@ fn main() -> wry::Result<()> {
                             .is_ok()
                             {
                                 bring_chrome_to_front(&chrome);
-                                send_state(&chrome, &tabs, &bookmarks, &settings);
+                                send_state(&chrome, &tabs, &bookmarks, &settings, mcp_enabled);
                                 focus_location(&window, &chrome, &mut palette_open);
                             }
                         }
@@ -1356,22 +1318,7 @@ fn main() -> wry::Result<()> {
                             }
                         }
                         ChromeCommand::OpenMcpHelp => {
-                            if add_tab(
-                                &window,
-                                &mut tabs,
-                                &mut views,
-                                &mut histories,
-                                &content_events_tx,
-                                &commands_tx,
-                                &current_theme,
-                                &mcp_help_url(),
-                                sidebar_visible,
-                                settings.search_engine,
-                            )
-                            .is_ok()
-                            {
-                                bring_chrome_to_front(&chrome);
-                            }
+                            open_mcp_help(&window, &chrome, &mut palette_open);
                         }
                         ChromeCommand::OpenSettings => {
                             open_settings(&window, &chrome, &mut palette_open);
@@ -1390,7 +1337,7 @@ fn main() -> wry::Result<()> {
                             }
                         }
                     }
-                    send_state(&chrome, &tabs, &bookmarks, &settings);
+                    send_state(&chrome, &tabs, &bookmarks, &settings, mcp_enabled);
                 }
             }
             Event::WindowEvent { event, .. } => match event {
@@ -1421,7 +1368,7 @@ fn main() -> wry::Result<()> {
                             )
                             .is_ok() =>
                         {
-                            send_state(&chrome, &tabs, &bookmarks, &settings);
+                            send_state(&chrome, &tabs, &bookmarks, &settings, mcp_enabled);
                             bring_chrome_to_front(&chrome);
                             focus_location(&window, &chrome, &mut palette_open);
                         }
@@ -1469,7 +1416,7 @@ fn main() -> wry::Result<()> {
                                 if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
                                 }
-                                send_state(&chrome, &tabs, &bookmarks, &settings);
+                                send_state(&chrome, &tabs, &bookmarks, &settings, mcp_enabled);
                             }
                         }
                         KeyCode::KeyI if modifiers.alt_key() => {
@@ -1492,7 +1439,7 @@ fn main() -> wry::Result<()> {
 mod tests {
     use super::{
         NEW_TAB_URL, TabHistory, eval_result, internal_page_response, is_only_new_tab,
-        mcp_help_url, normalize_url, parse_startup_args,
+        normalize_url, parse_startup_args,
     };
     use browser_core::{SearchEngine, TabManager, Theme};
     use wry::http::{Request, StatusCode, header::CONTENT_TYPE};
@@ -1564,21 +1511,14 @@ mod tests {
 
     #[test]
     fn serves_all_internal_pages_through_the_rab_protocol() {
-        let cases = [
-            (NEW_TAB_URL.to_owned(), "新しいタブ"),
-            (mcp_help_url(), "MCPの使い方"),
-        ];
-
-        for (url, expected_text) in cases {
-            let response = request_internal_page(&url, Theme::Dark);
-            assert_eq!(response.status(), StatusCode::OK);
-            assert_eq!(response.headers()[CONTENT_TYPE], "text/html; charset=utf-8");
-            assert!(
-                String::from_utf8(response.into_body())
-                    .unwrap()
-                    .contains(expected_text)
-            );
-        }
+        let response = request_internal_page(NEW_TAB_URL, Theme::Dark);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CONTENT_TYPE], "text/html; charset=utf-8");
+        assert!(
+            String::from_utf8(response.into_body())
+                .unwrap()
+                .contains("新しいタブ")
+        );
     }
 
     #[test]
@@ -1589,14 +1529,12 @@ mod tests {
         ];
 
         for (theme, color_scheme, background, muted_text) in themes {
-            for url in [NEW_TAB_URL.to_owned(), mcp_help_url()] {
-                let response = request_internal_page(&url, theme);
-                let html = String::from_utf8(response.into_body()).unwrap();
+            let response = request_internal_page(NEW_TAB_URL, theme);
+            let html = String::from_utf8(response.into_body()).unwrap();
 
-                assert!(html.contains(color_scheme));
-                assert!(html.contains(background));
-                assert!(html.contains(muted_text));
-            }
+            assert!(html.contains(color_scheme));
+            assert!(html.contains(background));
+            assert!(html.contains(muted_text));
         }
     }
 

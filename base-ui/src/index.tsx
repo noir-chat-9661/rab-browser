@@ -26,12 +26,14 @@ type Bookmark = {
 
 type SearchEngine = "google" | "duckduckgo" | "bing";
 type Theme = "dark" | "light";
+type SettingsCategory = "language" | "search" | "appearance" | "privacy" | "mcp";
 
 type BrowserState = {
   type: "state";
   tabs: Tab[];
   currentTabId: number | null;
   bookmarks: Bookmark[];
+  mcpEnabled: boolean;
   settings: {
     searchEngine: SearchEngine;
     theme: Theme;
@@ -43,6 +45,7 @@ type ChromeApi = {
   receive: (state: BrowserState) => void;
   openLocation: () => void;
   openSettings: () => void;
+  openMcpHelp: () => void;
 };
 
 declare global {
@@ -57,6 +60,7 @@ const emptyState: BrowserState = {
   tabs: [],
   currentTabId: null,
   bookmarks: [],
+  mcpEnabled: false,
   settings: {
     searchEngine: "google",
     theme: "dark",
@@ -131,6 +135,8 @@ function App() {
   const [state, setState] = createSignal(emptyState);
   const [locationOpen, setLocationOpen] = createSignal(false);
   const [settingsOpen, setSettingsOpen] = createSignal(false);
+  const [settingsCategory, setSettingsCategory] =
+    createSignal<SettingsCategory>("language");
   const [locationValue, setLocationValue] = createSignal("");
   let locationInput: HTMLInputElement | undefined;
   let settingsCloseButton: HTMLButtonElement | undefined;
@@ -198,6 +204,11 @@ function App() {
     });
   };
 
+  const openMcpHelp = () => {
+    setSettingsCategory("mcp");
+    openSettings();
+  };
+
   const navigate = () => {
     const url = locationValue().trim();
     if (!url) return;
@@ -210,6 +221,7 @@ function App() {
       receive: setState,
       openLocation,
       openSettings,
+      openMcpHelp,
     };
     send({ type: "chrome_ready" });
 
@@ -535,154 +547,243 @@ function App() {
                 <Close />
               </button>
             </header>
-            <div class="settings-content">
-              <div class="settings-group">
-                <div class="settings-copy">
-                  <h2>{t().language}</h2>
-                  <p>{t().languageDescription}</p>
-                </div>
-                <div class="theme-options">
-                  <For each={locales}>
-                    {(locale) => (
-                      <label
-                        class="theme-option"
-                        classList={{
-                          selected: state().settings.locale === locale,
+            <div class="settings-layout">
+              <nav class="settings-nav" aria-label={t().settings}>
+                <For
+                  each={[
+                    { id: "language" as const, label: t().language },
+                    { id: "search" as const, label: t().search },
+                    { id: "appearance" as const, label: t().appearance },
+                    { id: "privacy" as const, label: t().privacy },
+                    { id: "mcp" as const, label: t().mcp },
+                  ]}
+                >
+                  {(category, index) => (
+                    <button
+                      class="settings-nav-item"
+                      classList={{ active: settingsCategory() === category.id }}
+                      type="button"
+                      aria-current={settingsCategory() === category.id ? "page" : undefined}
+                      onClick={() => setSettingsCategory(category.id)}
+                    >
+                      <span class="settings-nav-index">
+                        {(index() + 1).toString().padStart(2, "0")}
+                      </span>
+                      <span>{category.label}</span>
+                    </button>
+                  )}
+                </For>
+              </nav>
+
+              <div class="settings-content">
+                <Show when={settingsCategory() === "language"}>
+                  <section class="settings-category-panel">
+                    <header class="settings-category-header">
+                      <h2>{t().language}</h2>
+                      <p>{t().languageDescription}</p>
+                    </header>
+                    <div class="theme-options">
+                      <For each={locales}>
+                        {(locale) => (
+                          <label
+                            class="theme-option"
+                            classList={{ selected: state().settings.locale === locale }}
+                          >
+                            <input
+                              type="radio"
+                              name="locale"
+                              value={locale}
+                              checked={state().settings.locale === locale}
+                              onChange={() => send({ type: "set_locale", locale })}
+                            />
+                            <span class="radio-mark" aria-hidden="true" />
+                            <span class="engine-copy">
+                              <strong>{locale === "japanese" ? t().japanese : t().english}</strong>
+                              <span>
+                                {locale === "japanese"
+                                  ? t().japaneseDescription
+                                  : t().englishDescription}
+                              </span>
+                            </span>
+                          </label>
+                        )}
+                      </For>
+                    </div>
+                  </section>
+                </Show>
+
+                <Show when={settingsCategory() === "search"}>
+                  <section class="settings-category-panel">
+                    <header class="settings-category-header">
+                      <h2>{t().defaultSearchEngine}</h2>
+                      <p>{t().defaultSearchEngineDescription}</p>
+                    </header>
+                    <div class="search-engine-options">
+                      <For each={searchEngines}>
+                        {(engine) => (
+                          <label
+                            class="search-engine-option"
+                            classList={{ selected: state().settings.searchEngine === engine.value }}
+                          >
+                            <input
+                              type="radio"
+                              name="search-engine"
+                              value={engine.value}
+                              checked={state().settings.searchEngine === engine.value}
+                              onChange={() =>
+                                send({ type: "set_search_engine", engine: engine.value })
+                              }
+                            />
+                            <span class="radio-mark" aria-hidden="true" />
+                            <span class="engine-copy">
+                              <strong>{engine.label}</strong>
+                              <span>{engine.detail}</span>
+                            </span>
+                          </label>
+                        )}
+                      </For>
+                    </div>
+                  </section>
+                </Show>
+
+                <Show when={settingsCategory() === "appearance"}>
+                  <section class="settings-category-panel">
+                    <header class="settings-category-header">
+                      <h2>{t().appearance}</h2>
+                      <p>{t().appearanceDescription}</p>
+                    </header>
+                    <div class="theme-options">
+                      <For each={themes}>
+                        {(theme) => (
+                          <label
+                            class="theme-option"
+                            classList={{ selected: state().settings.theme === theme }}
+                          >
+                            <input
+                              type="radio"
+                              name="theme"
+                              value={theme}
+                              checked={state().settings.theme === theme}
+                              onChange={() => send({ type: "set_theme", theme })}
+                            />
+                            <span class="radio-mark" aria-hidden="true" />
+                            <span class="engine-copy">
+                              <strong>{theme === "dark" ? t().dark : t().light}</strong>
+                              <span>{theme === "dark" ? t().darkTheme : t().lightTheme}</span>
+                            </span>
+                          </label>
+                        )}
+                      </For>
+                    </div>
+                  </section>
+                </Show>
+
+                <Show when={settingsCategory() === "privacy"}>
+                  <section class="settings-category-panel">
+                    <header class="settings-category-header">
+                      <h2>{t().privacy}</h2>
+                      <p>{t().privacyDescription}</p>
+                    </header>
+                    <div class="privacy-actions">
+                      <button
+                        class="privacy-action"
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm(t().clearHistoryConfirm)) {
+                            send({ type: "clear_history" });
+                          }
                         }}
                       >
-                        <input
-                          type="radio"
-                          name="locale"
-                          value={locale}
-                          checked={state().settings.locale === locale}
-                          onChange={() =>
-                            send({
-                              type: "set_locale",
-                              locale,
-                            })
-                          }
-                        />
-                        <span class="radio-mark" aria-hidden="true" />
-                        <span class="engine-copy">
-                          <strong>{locale === "japanese" ? t().japanese : t().english}</strong>
-                          <span>
-                            {locale === "japanese"
-                              ? t().japaneseDescription
-                              : t().englishDescription}
-                          </span>
+                        <span>
+                          <strong>{t().clearHistory}</strong>
+                          <small>{t().clearHistoryDescription}</small>
                         </span>
-                      </label>
-                    )}
-                  </For>
-                </div>
-              </div>
-
-              <div class="settings-group">
-                <div class="settings-copy">
-                  <h2>{t().defaultSearchEngine}</h2>
-                  <p>{t().defaultSearchEngineDescription}</p>
-                </div>
-                <div class="search-engine-options">
-                  <For each={searchEngines}>
-                    {(engine) => (
-                      <label
-                        class="search-engine-option"
-                        classList={{
-                          selected:
-                            state().settings.searchEngine === engine.value,
+                        <Trash />
+                      </button>
+                      <button
+                        class="privacy-action"
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm(t().clearCookiesConfirm)) {
+                            send({ type: "clear_cookies" });
+                          }
                         }}
                       >
-                        <input
-                          type="radio"
-                          name="search-engine"
-                          value={engine.value}
-                          checked={
-                            state().settings.searchEngine === engine.value
-                          }
-                          onChange={() =>
-                            send({
-                              type: "set_search_engine",
-                              engine: engine.value,
-                            })
-                          }
-                        />
-                        <span class="radio-mark" aria-hidden="true" />
-                        <span class="engine-copy">
-                          <strong>{engine.label}</strong>
-                          <span>{engine.detail}</span>
+                        <span>
+                          <strong>{t().clearCookies}</strong>
+                          <small>{t().clearCookiesDescription}</small>
                         </span>
-                      </label>
-                    )}
-                  </For>
-                </div>
-              </div>
+                        <Cookie />
+                      </button>
+                    </div>
+                  </section>
+                </Show>
 
-              <div class="settings-group">
-                <div class="settings-copy">
-                  <h2>{t().appearance}</h2>
-                  <p>{t().appearanceDescription}</p>
-                </div>
-                <div class="theme-options">
-                  <For each={themes}>
-                    {(theme) => (
-                      <label
-                        class="theme-option"
-                        classList={{
-                          selected: state().settings.theme === theme,
-                        }}
-                      >
-                        <input
-                          type="radio"
-                          name="theme"
-                          value={theme}
-                          checked={state().settings.theme === theme}
-                          onChange={() =>
-                            send({
-                              type: "set_theme",
-                              theme,
-                            })
-                          }
-                        />
-                        <span class="radio-mark" aria-hidden="true" />
-                        <span class="engine-copy">
-                          <strong>{theme === "dark" ? t().dark : t().light}</strong>
-                          <span>{theme === "dark" ? t().darkTheme : t().lightTheme}</span>
-                        </span>
-                      </label>
-                    )}
-                  </For>
-                </div>
-              </div>
-
-              <div class="settings-group">
-                <div class="settings-copy">
-                  <h2>{t().privacy}</h2>
-                  <p>{t().privacyDescription}</p>
-                </div>
-                <div class="privacy-actions">
-                  <button
-                    class="privacy-action"
-                    type="button"
-                    onClick={() => send({ type: "clear_history" })}
-                  >
-                    <span>
-                      <strong>{t().clearHistory}</strong>
-                      <small>{t().clearHistoryDescription}</small>
-                    </span>
-                    <Trash />
-                  </button>
-                  <button
-                    class="privacy-action"
-                    type="button"
-                    onClick={() => send({ type: "clear_cookies" })}
-                  >
-                    <span>
-                      <strong>{t().clearCookies}</strong>
-                      <small>{t().clearCookiesDescription}</small>
-                    </span>
-                    <Cookie />
-                  </button>
-                </div>
+                <Show when={settingsCategory() === "mcp"}>
+                  <section class="settings-category-panel mcp-settings">
+                    <header class="settings-category-header">
+                      <h2>{t().mcp}</h2>
+                      <p>{t().mcpDescription}</p>
+                    </header>
+                    <p class="mcp-overview">{t().mcpOverview}</p>
+                    <div class="mcp-info-grid">
+                      <div class="mcp-info-block">
+                        <h3>{t().mcpEnablement}</h3>
+                        <p>{t().mcpEnablementDescription}</p>
+                        <div class="mcp-command-list">
+                          <code>rab-browser --mcp</code>
+                          <code>RAB_MCP=1 rab-browser</code>
+                        </div>
+                      </div>
+                      <div class="mcp-info-block">
+                        <h3>{t().mcpStatus}</h3>
+                        <div
+                          class="mcp-status"
+                          classList={{ enabled: state().mcpEnabled }}
+                        >
+                          <span class="mcp-status-dot" aria-hidden="true" />
+                          <strong>
+                            {state().mcpEnabled ? t().mcpEnabled : t().mcpDisabled}
+                          </strong>
+                        </div>
+                        <p>
+                          {state().mcpEnabled
+                            ? t().mcpEnabledDescription
+                            : t().mcpDisabledDescription}
+                        </p>
+                      </div>
+                    </div>
+                    <div class="mcp-tools-section">
+                      <h3>{t().mcpAvailableTools}</h3>
+                      <ul class="mcp-tool-list">
+                        <For
+                          each={[
+                            ["navigate", t().mcpTools.navigate],
+                            ["new_tab", t().mcpTools.newTab],
+                            ["close_tab", t().mcpTools.closeTab],
+                            ["select_tab", t().mcpTools.selectTab],
+                            ["list_tabs", t().mcpTools.listTabs],
+                            ["go_back", t().mcpTools.goBack],
+                            ["go_forward", t().mcpTools.goForward],
+                            ["reload", t().mcpTools.reload],
+                            ["get_dom", t().mcpTools.getDom],
+                            ["get_text", t().mcpTools.getText],
+                            ["evaluate", t().mcpTools.evaluate],
+                            ["click", t().mcpTools.click],
+                            ["type", t().mcpTools.type],
+                          ]}
+                        >
+                          {(tool) => (
+                            <li>
+                              <code>{tool[0]}</code>
+                              <span>{tool[1]}</span>
+                            </li>
+                          )}
+                        </For>
+                      </ul>
+                    </div>
+                  </section>
+                </Show>
               </div>
             </div>
           </section>
