@@ -150,10 +150,49 @@ function App() {
   const [locationValue, setLocationValue] = createSignal("");
   const [mcpHttpPort, setMcpHttpPort] = createSignal("8765");
   const [mcpHttpPortInvalid, setMcpHttpPortInvalid] = createSignal(false);
+  const [confirmDialog, setConfirmDialog] = createSignal<{
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
   let locationInput: HTMLInputElement | undefined;
   let settingsCloseButton: HTMLButtonElement | undefined;
   let settingsContentPanel: HTMLDivElement | undefined;
+  let confirmCancelButton: HTMLButtonElement | undefined;
+  let confirmOkButton: HTMLButtonElement | undefined;
+  let confirmDialogPreviouslyFocused: HTMLElement | null = null;
   const t = createMemo(() => translations[state().settings.locale]);
+
+  // wry's WKUIDelegate does not implement the JS confirm/alert panels, so
+  // window.confirm() silently no-ops on macOS. Use an in-app modal instead.
+  const requestConfirm = (message: string, onConfirm: () => void) => {
+    confirmDialogPreviouslyFocused = document.activeElement as HTMLElement | null;
+    setConfirmDialog({ message, onConfirm });
+    // Default focus to Cancel, not the destructive action, so an accidental
+    // Enter/Space press doesn't confirm the deletion.
+    queueMicrotask(() => confirmCancelButton?.focus());
+  };
+  const closeConfirmDialog = () => {
+    setConfirmDialog(null);
+    confirmDialogPreviouslyFocused?.focus();
+    confirmDialogPreviouslyFocused = null;
+  };
+  const acceptConfirmDialog = () => {
+    const dialog = confirmDialog();
+    if (!dialog) return;
+    closeConfirmDialog();
+    dialog.onConfirm();
+  };
+  const trapConfirmDialogTab = (event: KeyboardEvent) => {
+    // Only two focusable elements in this dialog, so Tab and Shift+Tab both
+    // just toggle between them, keeping focus from escaping to the page
+    // behind the modal.
+    if (event.key !== "Tab") return;
+    event.preventDefault();
+    (document.activeElement === confirmCancelButton
+      ? confirmOkButton
+      : confirmCancelButton
+    )?.focus();
+  };
 
   const selectSettingsCategory = (category: SettingsCategory) => {
     setSettingsCategory(category);
@@ -277,6 +316,11 @@ function App() {
 
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
+        if (confirmDialog()) {
+          event.preventDefault();
+          closeConfirmDialog();
+          return;
+        }
         if (settingsOpen()) {
           event.preventDefault();
           closeSettings();
@@ -749,9 +793,9 @@ function App() {
                         class="privacy-action"
                         type="button"
                         onClick={() => {
-                          if (window.confirm(t().clearHistoryConfirm)) {
-                            send({ type: "clear_history" });
-                          }
+                          requestConfirm(t().clearHistoryConfirm, () =>
+                            send({ type: "clear_history" }),
+                          );
                         }}
                       >
                         <span>
@@ -764,9 +808,9 @@ function App() {
                         class="privacy-action"
                         type="button"
                         onClick={() => {
-                          if (window.confirm(t().clearCookiesConfirm)) {
-                            send({ type: "clear_cookies" });
-                          }
+                          requestConfirm(t().clearCookiesConfirm, () =>
+                            send({ type: "clear_cookies" }),
+                          );
                         }}
                       >
                         <span>
@@ -906,6 +950,42 @@ function App() {
             </div>
           </section>
         </div>
+      </Show>
+
+      <Show when={confirmDialog()}>
+        {(dialog) => (
+          <div class="palette-backdrop confirm-backdrop" onClick={closeConfirmDialog}>
+            <section
+              class="confirm-dialog"
+              role="alertdialog"
+              aria-modal="true"
+              aria-label={t().confirmDialogTitle}
+              aria-describedby="confirm-dialog-message"
+              onKeyDown={trapConfirmDialogTab}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <p id="confirm-dialog-message">{dialog().message}</p>
+              <div class="confirm-dialog-actions">
+                <button
+                  ref={confirmCancelButton}
+                  type="button"
+                  class="confirm-dialog-cancel"
+                  onClick={closeConfirmDialog}
+                >
+                  {t().confirmDialogCancel}
+                </button>
+                <button
+                  ref={confirmOkButton}
+                  type="button"
+                  class="confirm-dialog-ok"
+                  onClick={acceptConfirmDialog}
+                >
+                  {t().confirmDialogOk}
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
       </Show>
     </main>
   );
