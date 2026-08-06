@@ -8,3 +8,10 @@ license.workspace = true
 browser-core = { path = "../browser-core" }
 tao = "0.35.3"
 wry = { version = "0.55.1", features = ["devtools"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.0", default-features = false }
+objc2-app-kit = { version = "0.3.0", features = ["NSAlert", "NSTextField", "NSControl", "NSView", "NSWindow", "NSResponder", "NSApplication"], default-features = false }
+objc2-web-kit = { version = "0.3.0", features = ["WKWebView", "WKUIDelegate", "WKFrameInfo", "WKSecurityOrigin", "block2"], default-features = false }

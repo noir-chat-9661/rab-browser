@@ -1103,6 +1103,7 @@ fn main() -> wry::Result<()> {
             let _ = chrome_commands_tx.send(request.into_body());
         })
         .build_as_child(&window)?;
+    let _chrome_ui_delegate = browser_engine_wry::install_js_dialog_delegate(&chrome);
     chrome.set_bounds(chrome_bounds(&window))?;
 
     let dispatcher: Arc<dyn RequestDispatcher> =
