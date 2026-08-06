@@ -48,6 +48,9 @@ export const translations = {
     clearCookies: "Cookieを削除",
     clearCookiesDescription: "Cookieと閲覧データを削除します。",
     clearCookiesConfirm: "Cookieと閲覧データを削除しますか？この操作は取り消せません。",
+    confirmDialogTitle: "確認",
+    confirmDialogCancel: "キャンセル",
+    confirmDialogOk: "削除する",
     mcp: "MCP",
     mcpDescription: "AIアシスタントからrab-browserを操作できます。",
     mcpOverview:
@@ -132,6 +135,9 @@ export const translations = {
     clearCookies: "Clear cookies",
     clearCookiesDescription: "Clear cookies and browsing data.",
     clearCookiesConfirm: "Clear cookies and browsing data? This cannot be undone.",
+    confirmDialogTitle: "Confirm",
+    confirmDialogCancel: "Cancel",
+    confirmDialogOk: "Delete",
     mcp: "MCP",
     mcpDescription: "Control rab-browser from an AI assistant.",
     mcpOverview:
