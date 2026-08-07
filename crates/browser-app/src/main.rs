@@ -1200,7 +1200,11 @@ fn main() -> wry::Result<()> {
                         continue;
                     };
                     match command {
-                        ChromeCommand::ChromeReady => {}
+                        ChromeCommand::ChromeReady => {
+                            if current_tab_is_new(&tabs) {
+                                focus_location(&window, &chrome, &mut palette_open);
+                            }
+                        }
                         ChromeCommand::SelectTab { id } => {
                             if let Some(id) = resolve_tab_id(&tabs, id) {
                                 select_content_view(&mut tabs, &views, id);
