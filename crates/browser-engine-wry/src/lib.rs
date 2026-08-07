@@ -10,6 +10,15 @@ use wry::{
 };
 
 #[cfg(target_os = "macos")]
+use objc2::{MainThreadMarker, rc::Retained};
+#[cfg(target_os = "macos")]
+use objc2_app_kit::{NSAutoresizingMaskOptions, NSView};
+#[cfg(target_os = "macos")]
+use objc2_foundation::{NSPoint, NSRect, NSSize};
+#[cfg(target_os = "macos")]
+use wry::WebViewExtMacOS;
+
+#[cfg(target_os = "macos")]
 mod macos_js_dialogs;
 
 #[cfg(target_os = "macos")]
@@ -133,6 +142,15 @@ pub struct WryEngine {
     // UIDelegate reference before the retained delegate is dropped.
     webview: WebView,
     _ui_delegate: InstallJsDialogDelegateResult,
+    #[cfg(target_os = "macos")]
+    container: Retained<NSView>,
+}
+
+impl Drop for WryEngine {
+    fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        self.container.removeFromSuperview();
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -234,15 +252,34 @@ impl WryEngine {
             builder = builder.with_bounds(bounds);
         }
         let webview = builder.build_as_child(window)?;
+        #[cfg(target_os = "macos")]
+        let container = attach_to_offset_container(window, &webview, bounds);
         let ui_delegate = install_js_dialog_delegate(&webview);
         Ok(Self {
             webview,
             _ui_delegate: ui_delegate,
+            #[cfg(target_os = "macos")]
+            container,
         })
     }
 
-    pub fn set_bounds(&self, bounds: Rect) -> Result<(), wry::Error> {
-        self.webview.set_bounds(bounds)
+    /// Repositions the content WebView. On macOS this moves the offset
+    /// container (see `attach_to_offset_container`) rather than the WKWebView
+    /// itself, so the Web Inspector keeps docking to its right instead of
+    /// under the sidebar. Do not add a variant that sets the WKWebView's own
+    /// frame directly on macOS: that would desync it from the container's
+    /// bounds, which the inspector uses to size itself.
+    pub fn set_content_bounds(&self, window: &Window, bounds: Rect) -> Result<(), wry::Error> {
+        #[cfg(target_os = "macos")]
+        {
+            self.container.setFrame(appkit_rect(window, bounds));
+            Ok(())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = window;
+            self.webview.set_bounds(bounds)
+        }
     }
 
     pub fn focus(&self) -> Result<(), wry::Error> {
@@ -250,7 +287,15 @@ impl WryEngine {
     }
 
     pub fn set_visible(&self, visible: bool) -> Result<(), wry::Error> {
-        self.webview.set_visible(visible)
+        #[cfg(target_os = "macos")]
+        {
+            self.container.setHidden(!visible);
+            Ok(())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.webview.set_visible(visible)
+        }
     }
 
     pub fn evaluate_script_with_callback(
@@ -269,6 +314,68 @@ impl WryEngine {
     pub fn webview(&self) -> &WebView {
         &self.webview
     }
+}
+
+#[cfg(target_os = "macos")]
+fn attach_to_offset_container(
+    window: &Window,
+    webview: &WebView,
+    bounds: Option<Rect>,
+) -> Retained<NSView> {
+    let mtm = MainThreadMarker::new().expect("WKWebView creation must run on the main thread");
+    let container = NSView::new(mtm);
+    let bounds = bounds.unwrap_or(Rect {
+        position: tao::dpi::LogicalPosition::new(0.0, 0.0).into(),
+        size: window
+            .inner_size()
+            .to_logical::<f64>(window.scale_factor())
+            .into(),
+    });
+    container.setFrame(appkit_rect(window, bounds));
+    container.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+
+    let native_webview = webview.webview();
+    let native_window = native_webview
+        .window()
+        .expect("a child WKWebView must be attached to an NSWindow");
+    let content_view = native_window
+        .contentView()
+        .expect("an NSWindow containing a WKWebView must have a content view");
+
+    // Web Inspector sizes itself from inspectedView.superview.bounds. Making
+    // the sidebar-offset container that superview keeps the inspector to the
+    // right of the sidebar. Content views use the full window height here, so
+    // the AppKit Y-axis flip can be ignored.
+    native_webview.removeFromSuperview();
+    content_view.addSubview(&container);
+    container.addSubview(&native_webview);
+    native_webview.setFrame(container.bounds());
+    native_webview.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+
+    container
+}
+
+#[cfg(target_os = "macos")]
+/// Converts a `Rect` in tao's top-left-origin logical coordinates to an
+/// `NSRect` in the window's content view coordinate space, which AppKit
+/// anchors at the bottom-left unless the view opts into a flipped
+/// coordinate system (our container/content view don't).
+fn appkit_rect(window: &Window, bounds: Rect) -> NSRect {
+    let scale_factor = window.scale_factor();
+    let position = bounds.position.to_logical::<f64>(scale_factor);
+    let size = bounds.size.to_logical::<f64>(scale_factor);
+    let window_height = window
+        .inner_size()
+        .to_logical::<f64>(scale_factor)
+        .height;
+    NSRect::new(
+        NSPoint::new(position.x, window_height - position.y - size.height),
+        NSSize::new(size.width, size.height),
+    )
 }
 
 impl BrowserEngine for WryEngine {

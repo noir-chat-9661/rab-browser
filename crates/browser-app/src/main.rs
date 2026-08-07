@@ -538,7 +538,7 @@ fn create_content_view(
     )?;
     // Keep this as a post-build correction too: the window scale or size may
     // have changed while WKWebView was being initialized.
-    view.set_bounds(content_bounds(window, sidebar_visible))?;
+    view.set_content_bounds(window, content_bounds(window, sidebar_visible))?;
     Ok(view)
 }
 
@@ -727,7 +727,7 @@ fn apply_layout(
 ) {
     let content_rect = content_bounds(window, sidebar_visible);
     for view in views.values() {
-        let _ = view.set_bounds(content_rect);
+        let _ = view.set_content_bounds(window, content_rect);
     }
 
     let chrome_visible = sidebar_visible || palette_open;
