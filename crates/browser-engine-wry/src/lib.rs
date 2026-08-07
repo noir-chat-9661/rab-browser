@@ -263,10 +263,12 @@ impl WryEngine {
         })
     }
 
-    pub fn set_bounds(&self, bounds: Rect) -> Result<(), wry::Error> {
-        self.webview.set_bounds(bounds)
-    }
-
+    /// Repositions the content WebView. On macOS this moves the offset
+    /// container (see `attach_to_offset_container`) rather than the WKWebView
+    /// itself, so the Web Inspector keeps docking to its right instead of
+    /// under the sidebar. Do not add a variant that sets the WKWebView's own
+    /// frame directly on macOS: that would desync it from the container's
+    /// bounds, which the inspector uses to size itself.
     pub fn set_content_bounds(&self, window: &Window, bounds: Rect) -> Result<(), wry::Error> {
         #[cfg(target_os = "macos")]
         {
@@ -358,12 +360,20 @@ fn attach_to_offset_container(
 }
 
 #[cfg(target_os = "macos")]
+/// Converts a `Rect` in tao's top-left-origin logical coordinates to an
+/// `NSRect` in the window's content view coordinate space, which AppKit
+/// anchors at the bottom-left unless the view opts into a flipped
+/// coordinate system (our container/content view don't).
 fn appkit_rect(window: &Window, bounds: Rect) -> NSRect {
     let scale_factor = window.scale_factor();
     let position = bounds.position.to_logical::<f64>(scale_factor);
     let size = bounds.size.to_logical::<f64>(scale_factor);
+    let window_height = window
+        .inner_size()
+        .to_logical::<f64>(scale_factor)
+        .height;
     NSRect::new(
-        NSPoint::new(position.x, 0.0),
+        NSPoint::new(position.x, window_height - position.y - size.height),
         NSSize::new(size.width, size.height),
     )
 }
