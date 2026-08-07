@@ -441,6 +441,15 @@ function App() {
             <span>{t().tabs}</span>
             <span>{state().tabs.length.toString().padStart(2, "0")}</span>
           </div>
+          <button
+            class="new-tab"
+            type="button"
+            onClick={() => send({ type: "new_tab" })}
+          >
+            <Plus />
+            <span>{t().newTab}</span>
+            <kbd>{shortcutLabel("T")}</kbd>
+          </button>
           <div class="tab-list">
             <For each={state().tabs}>
               {(tab) => (
@@ -448,6 +457,7 @@ function App() {
                   class="tab"
                   classList={{ active: tab.id === state().currentTabId }}
                   type="button"
+                  title={isNewTabUrl(tab.url) ? t().readyToBrowse : tab.url}
                   onClick={() => send({ type: "select_tab", id: tab.id })}
                 >
                   <span
@@ -463,12 +473,7 @@ function App() {
                       )}
                     </Show>
                   </span>
-                  <span class="tab-copy">
-                    <span class="tab-title">{displayTitle(tab, t().newTab)}</span>
-                    <span class="tab-host">
-                      {isNewTabUrl(tab.url) ? t().readyToBrowse : tab.url}
-                    </span>
-                  </span>
+                  <span class="tab-title">{displayTitle(tab, t().newTab)}</span>
                   <span
                     class="tab-close"
                     role="button"
@@ -546,16 +551,6 @@ function App() {
             </div>
           </Show>
         </section>
-
-        <button
-          class="new-tab"
-          type="button"
-          onClick={() => send({ type: "new_tab" })}
-        >
-          <Plus />
-          <span>{t().newTab}</span>
-          <kbd>{shortcutLabel("T")}</kbd>
-        </button>
       </div>
 
       <Show when={locationOpen()}>
