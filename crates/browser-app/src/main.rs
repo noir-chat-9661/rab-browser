@@ -1507,6 +1507,14 @@ fn main() -> wry::Result<()> {
                 WindowEvent::ModifiersChanged(state) => modifiers = state,
                 WindowEvent::KeyboardInput { event, .. }
                     if event.state == ElementState::Pressed
+                        && event.physical_key == KeyCode::F12 =>
+                {
+                    if let Some(view) = tabs.current_id().and_then(|id| views.get(&id)) {
+                        view.open_devtools();
+                    }
+                }
+                WindowEvent::KeyboardInput { event, .. }
+                    if event.state == ElementState::Pressed
                         && primary_modifier_pressed(modifiers) =>
                 {
                     match event.physical_key {
@@ -1545,6 +1553,32 @@ fn main() -> wry::Result<()> {
                                     tabs.current_id().and_then(|id| views.get_mut(&id))
                             {
                                 let _ = view.reload();
+                            }
+                        }
+                        KeyCode::BracketLeft | KeyCode::ArrowLeft
+                            if !modifiers.alt_key() && !modifiers.shift_key() =>
+                        {
+                            if let Some(id) = tabs.current_id()
+                                && let Some(history) = histories.get_mut(&id)
+                                && history.go_back()
+                            {
+                                if let Some(view) = views.get_mut(&id) {
+                                    let _ = view.go_back();
+                                }
+                                update_history_flags(&mut tabs, &histories, id);
+                            }
+                        }
+                        KeyCode::BracketRight | KeyCode::ArrowRight
+                            if !modifiers.alt_key() && !modifiers.shift_key() =>
+                        {
+                            if let Some(id) = tabs.current_id()
+                                && let Some(history) = histories.get_mut(&id)
+                                && history.go_forward()
+                            {
+                                if let Some(view) = views.get_mut(&id) {
+                                    let _ = view.go_forward();
+                                }
+                                update_history_flags(&mut tabs, &histories, id);
                             }
                         }
                         KeyCode::KeyS

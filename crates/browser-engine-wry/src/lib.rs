@@ -39,9 +39,17 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
   };
 
   document.addEventListener("keydown", (event) => {
-    if (!hasPrimaryModifier(event) || event.repeat) return;
+    if (event.repeat) return;
 
     const key = event.key.toLowerCase();
+    if (key === "f12") {
+      event.preventDefault();
+      event.stopPropagation();
+      postMessage({ type: "open_devtools" });
+      return;
+    }
+    if (!hasPrimaryModifier(event)) return;
+
     const primaryOnly =
       !event.altKey && !hasSecondaryPrimaryModifier(event) && !event.shiftKey;
     let type = null;
@@ -52,6 +60,8 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
     }
     else if (primaryOnly && key === "s") type = "toggle_sidebar";
     else if (primaryOnly && key === "w") type = "close_current_tab";
+    else if (primaryOnly && (key === "[" || key === "arrowleft")) type = "go_back";
+    else if (primaryOnly && (key === "]" || key === "arrowright")) type = "go_forward";
     else if (
       event.altKey &&
       !hasSecondaryPrimaryModifier(event) &&
