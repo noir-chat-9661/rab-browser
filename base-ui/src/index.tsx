@@ -26,7 +26,13 @@ type Bookmark = {
 
 type SearchEngine = "google" | "duckduckgo" | "bing";
 type Theme = "dark" | "light";
-type SettingsCategory = "language" | "search" | "appearance" | "privacy" | "mcp";
+type SettingsCategory =
+  | "language"
+  | "search"
+  | "appearance"
+  | "privacy"
+  | "performance"
+  | "mcp";
 
 type BrowserState = {
   type: "state";
@@ -43,6 +49,7 @@ type BrowserState = {
     searchEngine: SearchEngine;
     theme: Theme;
     locale: Locale;
+    tabSuspendGraceSecs: number;
   };
 };
 
@@ -75,6 +82,7 @@ const emptyState: BrowserState = {
     searchEngine: "google",
     theme: "dark",
     locale: "japanese",
+    tabSuspendGraceSecs: 300,
   },
 };
 
@@ -150,6 +158,8 @@ function App() {
   const [locationValue, setLocationValue] = createSignal("");
   const [mcpHttpPort, setMcpHttpPort] = createSignal("8765");
   const [mcpHttpPortInvalid, setMcpHttpPortInvalid] = createSignal(false);
+  const [tabSuspendGraceMinutes, setTabSuspendGraceMinutes] = createSignal("5");
+  const [tabSuspendGraceInvalid, setTabSuspendGraceInvalid] = createSignal(false);
   const [confirmDialog, setConfirmDialog] = createSignal<{
     message: string;
     onConfirm: () => void;
@@ -245,6 +255,19 @@ function App() {
     if (port !== null) send({ type: "set_mcp_http", enabled, port });
   };
 
+  const validTabSuspendGraceMinutes = () => {
+    const minutes = Number(tabSuspendGraceMinutes());
+    return Number.isInteger(minutes) && minutes >= 1 && minutes <= 60
+      ? minutes
+      : null;
+  };
+
+  const updateTabSuspendGrace = () => {
+    const minutes = validTabSuspendGraceMinutes();
+    setTabSuspendGraceInvalid(minutes === null);
+    if (minutes !== null) send({ type: "set_tab_suspend_grace", secs: minutes * 60 });
+  };
+
   createEffect(() => {
     document.documentElement.dataset.theme = state().settings.theme;
     document.documentElement.lang =
@@ -253,6 +276,12 @@ function App() {
 
   createEffect(() => {
     setMcpHttpPort(String(state().mcpHttp.port));
+  });
+
+  createEffect(() => {
+    setTabSuspendGraceMinutes(
+      String(Math.round(state().settings.tabSuspendGraceSecs / 60)),
+    );
   });
 
   const closeLocation = () => {
@@ -644,6 +673,7 @@ function App() {
                     { id: "search" as const, label: t().search },
                     { id: "appearance" as const, label: t().appearance },
                     { id: "privacy" as const, label: t().privacy },
+                    { id: "performance" as const, label: t().performance },
                     { id: "mcp" as const, label: t().mcp },
                   ]}
                 >
@@ -815,6 +845,35 @@ function App() {
                         <Cookie />
                       </button>
                     </div>
+                  </section>
+                </Show>
+
+                <Show when={settingsCategory() === "performance"}>
+                  <section class="settings-category-panel">
+                    <header class="settings-category-header">
+                      <h2>{t().performance}</h2>
+                      <p>{t().performanceDescription}</p>
+                    </header>
+                    <label class="mcp-http-port tab-suspend-grace">
+                      <span>{t().tabSuspendGrace}</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max="60"
+                        value={tabSuspendGraceMinutes()}
+                        aria-invalid={tabSuspendGraceInvalid()}
+                        onInput={(event) => {
+                          setTabSuspendGraceMinutes(event.currentTarget.value);
+                          updateTabSuspendGrace();
+                        }}
+                      />
+                    </label>
+                    <p class="settings-hint">{t().tabSuspendGraceDescription}</p>
+                    <Show when={tabSuspendGraceInvalid()}>
+                      <p class="mcp-http-error" role="alert">
+                        {t().tabSuspendGraceInvalid}
+                      </p>
+                    </Show>
                   </section>
                 </Show>
 

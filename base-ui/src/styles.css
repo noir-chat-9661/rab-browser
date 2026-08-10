@@ -740,7 +740,10 @@ kbd {
 .settings-panel {
   display: flex;
   width: min(760px, 100%);
-  max-height: min(860px, calc(100% - 48px));
+  /* Fixed (not max-) height so the panel doesn't shrink to fit whichever
+     category has the least content (e.g. Language), which made switching
+     categories visibly resize the whole modal. */
+  height: min(860px, calc(100% - 48px));
   flex-direction: column;
   overflow: hidden;
   background: var(--panel-bg);
@@ -1214,6 +1217,17 @@ kbd {
   font-weight: 650;
 }
 
+.tab-suspend-grace {
+  margin-top: 0;
+}
+
+.settings-hint {
+  margin: 6px 0 0;
+  color: var(--text-copy-muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
 .mcp-tools-section {
   margin-top: 22px;
 }
@@ -1267,7 +1281,7 @@ kbd {
   }
 
   .settings-panel {
-    max-height: calc(100% - 24px);
+    height: calc(100% - 24px);
   }
 
   .settings-layout {
