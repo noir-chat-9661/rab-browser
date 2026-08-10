@@ -625,11 +625,9 @@ fn select_content_view(
     // forward buttons correctly on the current page). Upgrade to an
     // LRU-of-N cache if reload lag on switch-back proves annoying, or skip
     // suspension for the tab with audio/video playing if that matters.
-    let other_ids: Vec<TabId> = views.keys().copied().filter(|&vid| vid != id).collect();
-    for other_id in other_ids {
-        views.remove(&other_id);
-    }
-
+    // Ensure the target tab has a view *before* dropping the others: if
+    // creation fails (e.g. WKWebView init error), leaving the previous
+    // tab's view alone is a smaller failure than leaving zero live views.
     if !ensure_content_view(
         window,
         tabs,
@@ -641,6 +639,11 @@ fn select_content_view(
         id,
     ) {
         return;
+    }
+
+    let other_ids: Vec<TabId> = views.keys().copied().filter(|&vid| vid != id).collect();
+    for other_id in other_ids {
+        views.remove(&other_id);
     }
 
     if let Some(view) = views.get(&id) {
