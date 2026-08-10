@@ -563,16 +563,92 @@ fn bring_chrome_to_front(chrome: &WebView) {
 #[cfg(not(target_os = "macos"))]
 fn bring_chrome_to_front(_chrome: &WebView) {}
 
-fn select_content_view(tabs: &mut TabManager, views: &BTreeMap<TabId, WryEngine>, id: TabId) {
+/// Recreates a suspended tab's WKWebView on demand (navigated back to its
+/// last known URL) if it doesn't already have one. Used both when the user
+/// switches to a tab and when MCP targets a backgrounded tab directly — the
+/// latter doesn't go through `select_content_view`'s single-view sweep, so
+/// it can leave more than one live view around until the next real tab
+/// switch cleans it up. That's fine: MCP touching a background tab is rare
+/// and short-lived, not the steady-state memory cost this feature targets.
+#[allow(clippy::too_many_arguments)]
+fn ensure_content_view(
+    window: &Window,
+    tabs: &TabManager,
+    views: &mut BTreeMap<TabId, WryEngine>,
+    events_tx: &Sender<ContentEvent>,
+    commands_tx: &Sender<String>,
+    theme: &Rc<Cell<Theme>>,
+    sidebar_visible: bool,
+    id: TabId,
+) -> bool {
+    if views.contains_key(&id) {
+        return true;
+    }
+    let Some(url) = tabs.tab(id).map(|tab| tab.url.clone()) else {
+        return false;
+    };
+    let Ok(view) = create_content_view(
+        window,
+        id,
+        &url,
+        sidebar_visible,
+        events_tx,
+        commands_tx,
+        theme,
+    ) else {
+        return false;
+    };
+    views.insert(id, view);
+    true
+}
+
+#[allow(clippy::too_many_arguments)]
+fn select_content_view(
+    window: &Window,
+    tabs: &mut TabManager,
+    views: &mut BTreeMap<TabId, WryEngine>,
+    events_tx: &Sender<ContentEvent>,
+    commands_tx: &Sender<String>,
+    theme: &Rc<Cell<Theme>>,
+    sidebar_visible: bool,
+    id: TabId,
+) {
     if !tabs.select_tab(id) {
         return;
     }
-    for (view_id, view) in views {
-        let selected = *view_id == id;
-        let _ = view.set_visible(selected);
-        if selected {
-            let _ = view.focus();
-        }
+
+    // ponytail: single-active-view suspension. Only the selected tab keeps a
+    // live WKWebView; every other tab is dropped to bound memory/process
+    // count to one content view regardless of how many tabs are open. This
+    // loses scroll position and the WKWebView's native back/forward stack
+    // for backgrounded tabs (our own TabHistory still drives our back/
+    // forward buttons correctly on the current page). Upgrade to an
+    // LRU-of-N cache if reload lag on switch-back proves annoying, or skip
+    // suspension for the tab with audio/video playing if that matters.
+    // Ensure the target tab has a view *before* dropping the others: if
+    // creation fails (e.g. WKWebView init error), leaving the previous
+    // tab's view alone is a smaller failure than leaving zero live views.
+    if !ensure_content_view(
+        window,
+        tabs,
+        views,
+        events_tx,
+        commands_tx,
+        theme,
+        sidebar_visible,
+        id,
+    ) {
+        return;
+    }
+
+    let other_ids: Vec<TabId> = views.keys().copied().filter(|&vid| vid != id).collect();
+    for other_id in other_ids {
+        views.remove(&other_id);
+    }
+
+    if let Some(view) = views.get(&id) {
+        let _ = view.set_visible(true);
+        let _ = view.focus();
     }
 }
 
@@ -655,7 +731,16 @@ fn add_tab(
         Ok(view) => {
             histories.insert(id, TabHistory::new(url));
             views.insert(id, view);
-            select_content_view(tabs, views, id);
+            select_content_view(
+                window,
+                tabs,
+                views,
+                events_tx,
+                commands_tx,
+                theme,
+                sidebar_visible,
+                id,
+            );
             Ok(id)
         }
         Err(error) => {
@@ -706,7 +791,16 @@ fn close_tab(
             CloseTabResult::Closed
         };
     } else if let Some(current) = tabs.current_id() {
-        select_content_view(tabs, views, current);
+        select_content_view(
+            window,
+            tabs,
+            views,
+            events_tx,
+            commands_tx,
+            theme,
+            sidebar_visible,
+            current,
+        );
     }
     CloseTabResult::Closed
 }
@@ -915,7 +1009,16 @@ fn handle_mcp_request(
         }
         McpRequest::SelectTab { id, reply } => {
             let selected = resolve_tab_id(tabs, id).is_some_and(|id| {
-                select_content_view(tabs, views, id);
+                select_content_view(
+                    window,
+                    tabs,
+                    views,
+                    content_events_tx,
+                    commands_tx,
+                    theme,
+                    sidebar_visible,
+                    id,
+                );
                 true
             });
             if selected {
@@ -1039,10 +1142,20 @@ fn handle_mcp_request(
                 let _ = reply.send(Err(message.to_owned()));
                 return;
             };
-            let Some(view) = views.get(&id) else {
+            if !ensure_content_view(
+                window,
+                tabs,
+                views,
+                content_events_tx,
+                commands_tx,
+                theme,
+                sidebar_visible,
+                id,
+            ) {
                 let _ = reply.send(Err("target tab has no content view".to_owned()));
                 return;
-            };
+            }
+            let view = views.get(&id).expect("just ensured by ensure_content_view");
 
             let pending_reply = Arc::new(Mutex::new(Some(reply)));
             let callback_reply = Arc::clone(&pending_reply);
@@ -1207,7 +1320,16 @@ fn main() -> wry::Result<()> {
                         }
                         ChromeCommand::SelectTab { id } => {
                             if let Some(id) = resolve_tab_id(&tabs, id) {
-                                select_content_view(&mut tabs, &views, id);
+                                select_content_view(
+                                    &window,
+                                    &mut tabs,
+                                    &mut views,
+                                    &content_events_tx,
+                                    &commands_tx,
+                                    &current_theme,
+                                    sidebar_visible,
+                                    id,
+                                );
                             }
                         }
                         ChromeCommand::NewTab { url } => {
