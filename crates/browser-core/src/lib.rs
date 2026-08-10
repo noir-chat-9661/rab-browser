@@ -188,11 +188,32 @@ impl std::str::FromStr for Locale {
 }
 
 /// Browser settings kept for the lifetime of the process.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppSettings {
     pub search_engine: SearchEngine,
     pub theme: Theme,
     pub locale: Locale,
+    /// How long a backgrounded tab sits idle before its WebView is
+    /// suspended to save memory. User-configurable; see `MIN_TAB_SUSPEND_GRACE_SECS`
+    /// and `MAX_TAB_SUSPEND_GRACE_SECS` for the accepted range.
+    pub tab_suspend_grace_secs: u64,
+}
+
+/// Default/minimum/maximum for `AppSettings::tab_suspend_grace_secs`, shared
+/// so the UI and the setter can validate against the same bounds.
+pub const DEFAULT_TAB_SUSPEND_GRACE_SECS: u64 = 300;
+pub const MIN_TAB_SUSPEND_GRACE_SECS: u64 = 10;
+pub const MAX_TAB_SUSPEND_GRACE_SECS: u64 = 3600;
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            search_engine: SearchEngine::default(),
+            theme: Theme::default(),
+            locale: Locale::default(),
+            tab_suspend_grace_secs: DEFAULT_TAB_SUSPEND_GRACE_SECS,
+        }
+    }
 }
 
 /// One page in the browser-wide browsing history.
