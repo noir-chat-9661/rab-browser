@@ -563,16 +563,55 @@ fn bring_chrome_to_front(chrome: &WebView) {
 #[cfg(not(target_os = "macos"))]
 fn bring_chrome_to_front(_chrome: &WebView) {}
 
-fn select_content_view(tabs: &mut TabManager, views: &BTreeMap<TabId, WryEngine>, id: TabId) {
+#[allow(clippy::too_many_arguments)]
+fn select_content_view(
+    window: &Window,
+    tabs: &mut TabManager,
+    views: &mut BTreeMap<TabId, WryEngine>,
+    events_tx: &Sender<ContentEvent>,
+    commands_tx: &Sender<String>,
+    theme: &Rc<Cell<Theme>>,
+    sidebar_visible: bool,
+    id: TabId,
+) {
     if !tabs.select_tab(id) {
         return;
     }
-    for (view_id, view) in views {
-        let selected = *view_id == id;
-        let _ = view.set_visible(selected);
-        if selected {
-            let _ = view.focus();
-        }
+
+    // ponytail: single-active-view suspension. Only the selected tab keeps a
+    // live WKWebView; every other tab is dropped to bound memory/process
+    // count to one content view regardless of how many tabs are open. This
+    // loses scroll position and the WKWebView's native back/forward stack
+    // for backgrounded tabs (our own TabHistory still drives our back/
+    // forward buttons correctly on the current page). Upgrade to an
+    // LRU-of-N cache if reload lag on switch-back proves annoying, or skip
+    // suspension for the tab with audio/video playing if that matters.
+    let other_ids: Vec<TabId> = views.keys().copied().filter(|&vid| vid != id).collect();
+    for other_id in other_ids {
+        views.remove(&other_id);
+    }
+
+    if let std::collections::btree_map::Entry::Vacant(entry) = views.entry(id) {
+        let Some(url) = tabs.tab(id).map(|tab| tab.url.clone()) else {
+            return;
+        };
+        let Ok(view) = create_content_view(
+            window,
+            id,
+            &url,
+            sidebar_visible,
+            events_tx,
+            commands_tx,
+            theme,
+        ) else {
+            return;
+        };
+        entry.insert(view);
+    }
+
+    if let Some(view) = views.get(&id) {
+        let _ = view.set_visible(true);
+        let _ = view.focus();
     }
 }
 
@@ -655,7 +694,16 @@ fn add_tab(
         Ok(view) => {
             histories.insert(id, TabHistory::new(url));
             views.insert(id, view);
-            select_content_view(tabs, views, id);
+            select_content_view(
+                window,
+                tabs,
+                views,
+                events_tx,
+                commands_tx,
+                theme,
+                sidebar_visible,
+                id,
+            );
             Ok(id)
         }
         Err(error) => {
@@ -706,7 +754,16 @@ fn close_tab(
             CloseTabResult::Closed
         };
     } else if let Some(current) = tabs.current_id() {
-        select_content_view(tabs, views, current);
+        select_content_view(
+            window,
+            tabs,
+            views,
+            events_tx,
+            commands_tx,
+            theme,
+            sidebar_visible,
+            current,
+        );
     }
     CloseTabResult::Closed
 }
@@ -915,7 +972,16 @@ fn handle_mcp_request(
         }
         McpRequest::SelectTab { id, reply } => {
             let selected = resolve_tab_id(tabs, id).is_some_and(|id| {
-                select_content_view(tabs, views, id);
+                select_content_view(
+                    window,
+                    tabs,
+                    views,
+                    content_events_tx,
+                    commands_tx,
+                    theme,
+                    sidebar_visible,
+                    id,
+                );
                 true
             });
             if selected {
@@ -1207,7 +1273,16 @@ fn main() -> wry::Result<()> {
                         }
                         ChromeCommand::SelectTab { id } => {
                             if let Some(id) = resolve_tab_id(&tabs, id) {
-                                select_content_view(&mut tabs, &views, id);
+                                select_content_view(
+                                    &window,
+                                    &mut tabs,
+                                    &mut views,
+                                    &content_events_tx,
+                                    &commands_tx,
+                                    &current_theme,
+                                    sidebar_visible,
+                                    id,
+                                );
                             }
                         }
                         ChromeCommand::NewTab { url } => {
