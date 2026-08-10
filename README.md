@@ -66,8 +66,9 @@ cargo run -p browser-app -- https://example.com
 - **テーマ・言語設定**: ダーク/ライトテーマ、日本語/英語表示の切り替え
 - **プライバシー**: 履歴・Cookie/閲覧データの削除
 - **MCPサーバー内蔵**: ブラウザ自身がMCPサーバーとして動作し、AIアシスタントからタブ操作・
-  ページ内容取得・クリック/入力などを実行できる。Claude Desktop / Claude Code CLI / Cursor へは
-  設定パネルからワンクリックで登録可能(詳細は下記)
+  ページ内容取得・クリック/入力などを実行できる。Claude Desktop / Claude Code CLI / Cursor /
+  Windsurf / Cline / Antigravity / Zed / Codex CLI / OpenCode CLI へは設定パネルから
+  ワンクリックで登録可能(詳細は下記)
 
 ## パフォーマンス
 
@@ -99,11 +100,23 @@ MCPは**自動では有効化されない**。以下のいずれかを明示的�
 
 #### MCPクライアントへの登録
 
-Claude Desktop / Claude Code CLI / Cursor については、設定パネルのMCPカテゴリにある
-「登録」ボタンから、対象クライアントを選んでワンクリックで設定ファイル
-(`claude_desktop_config.json` / `.claude.json` / `.cursor/mcp.json`)へ追記できる
-(既存の他エントリは保持される)。それ以外のMCPクライアントは、上記いずれかの設定ファイルを
-参考に手動でstdio方式のサーバーとして登録すること。
+設定パネルのMCPカテゴリにある「登録」ボタンから、対象クライアントを選んでワンクリックで
+それぞれの設定ファイルへ追記できる(既存の他エントリ・他の設定項目は保持される)。
+
+| クライアント | 設定ファイル |
+|---|---|
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Claude Code CLI | `~/.claude.json` |
+| Cursor | `~/.cursor/mcp.json` |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+| Cline(VS Code拡張) | `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` |
+| Antigravity(agy CLI) | `~/.gemini/config/mcp_config.json` |
+| Zed | `~/.config/zed/settings.json`(`context_servers`キー) |
+| Codex CLI | `~/.codex/config.toml`(`mcp_servers`テーブル) |
+| OpenCode CLI | `~/.config/opencode/opencode.json`(`mcp`キー) |
+
+それ以外のMCPクライアントは、上記いずれかの設定ファイルを参考に手動でstdio方式のサーバーとして
+登録すること。
 
 Streamable HTTPはローカルホストのみにbindし、DNS rebinding対策としてHostヘッダーも
 loopbackホストに制限している。ただし認証はないため、同じマシン上のすべてのプロセスが
