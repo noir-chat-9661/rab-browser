@@ -134,6 +134,21 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
     attributes: true,
     attributeFilter: ["href", "rel"],
   });
+
+  let lastMediaPlaying;
+  const notifyMediaPlaybackChanged = () => {
+    const playing = [...document.querySelectorAll("video, audio")].some(
+      (media) => !media.paused && !media.ended,
+    );
+    if (playing === lastMediaPlaying) return;
+    lastMediaPlaying = playing;
+    postMessage({ type: "media_playback_changed", playing });
+  };
+
+  document.addEventListener("play", notifyMediaPlaybackChanged, true);
+  document.addEventListener("pause", notifyMediaPlaybackChanged, true);
+  document.addEventListener("ended", notifyMediaPlaybackChanged, true);
+  document.addEventListener("DOMContentLoaded", notifyMediaPlaybackChanged);
 })();
 "#;
 
