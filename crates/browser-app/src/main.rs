@@ -8,6 +8,7 @@ use std::{
         Arc, Mutex,
         mpsc::{self, Sender},
     },
+    time::{Duration, Instant},
 };
 
 use browser_core::{
@@ -38,6 +39,8 @@ use wry::{
 const SIDEBAR_WIDTH: f64 = 264.0;
 const INTERNAL_PROTOCOL: &str = "rab";
 const NEW_TAB_URL: &str = "rab://newtab/";
+// Keep this easy to tune once real-world tab switching behavior is measured.
+const TAB_SUSPEND_GRACE: Duration = Duration::from_secs(30);
 
 struct ProxyDispatcher(EventLoopProxy<McpRequest>);
 
@@ -74,6 +77,7 @@ enum ChromeCommand {
     SetMcpHttp { enabled: bool, port: u16 },
     SetLocale { locale: String },
     FaviconChanged { url: String },
+    MediaPlaybackChanged { playing: bool },
     OpenDevtools,
     OpenMcpHelp,
     OpenSettings,
@@ -86,6 +90,7 @@ enum ContentEvent {
     TitleChanged { id: TabId, title: String },
     PageLoaded { id: TabId, url: String },
     FaviconChanged { id: TabId, url: String },
+    MediaPlaybackChanged { id: TabId, playing: bool },
 }
 
 #[derive(Serialize)]
@@ -507,7 +512,7 @@ fn create_content_view(
 ) -> wry::Result<WryEngine> {
     let title_tx = events_tx.clone();
     let load_tx = events_tx.clone();
-    let favicon_tx = events_tx.clone();
+    let ipc_events_tx = events_tx.clone();
     let content_commands_tx = commands_tx.clone();
     let internal_page_theme = Rc::clone(theme);
     let bounds = content_bounds(window, sidebar_visible);
@@ -525,12 +530,16 @@ fn create_content_view(
         },
         move |request: Request<String>| {
             let body = request.into_body();
-            if let Ok(ChromeCommand::FaviconChanged { url }) =
-                serde_json::from_str::<ChromeCommand>(&body)
-            {
-                let _ = favicon_tx.send(ContentEvent::FaviconChanged { id, url });
-            } else {
-                let _ = content_commands_tx.send(body);
+            match serde_json::from_str::<ChromeCommand>(&body) {
+                Ok(ChromeCommand::FaviconChanged { url }) => {
+                    let _ = ipc_events_tx.send(ContentEvent::FaviconChanged { id, url });
+                }
+                Ok(ChromeCommand::MediaPlaybackChanged { playing }) => {
+                    let _ = ipc_events_tx.send(ContentEvent::MediaPlaybackChanged { id, playing });
+                }
+                _ => {
+                    let _ = content_commands_tx.send(body);
+                }
             }
         },
         INTERNAL_PROTOCOL,
@@ -565,11 +574,7 @@ fn bring_chrome_to_front(_chrome: &WebView) {}
 
 /// Recreates a suspended tab's WKWebView on demand (navigated back to its
 /// last known URL) if it doesn't already have one. Used both when the user
-/// switches to a tab and when MCP targets a backgrounded tab directly — the
-/// latter doesn't go through `select_content_view`'s single-view sweep, so
-/// it can leave more than one live view around until the next real tab
-/// switch cleans it up. That's fine: MCP touching a background tab is rare
-/// and short-lived, not the steady-state memory cost this feature targets.
+/// switches to a tab and when MCP targets a backgrounded tab directly.
 #[allow(clippy::too_many_arguments)]
 fn ensure_content_view(
     window: &Window,
@@ -611,23 +616,16 @@ fn select_content_view(
     commands_tx: &Sender<String>,
     theme: &Rc<Cell<Theme>>,
     sidebar_visible: bool,
+    last_active: &mut BTreeMap<TabId, Instant>,
     id: TabId,
 ) {
-    if !tabs.select_tab(id) {
+    let previous = tabs.current_id();
+    if tabs.tab(id).is_none() {
         return;
     }
 
-    // ponytail: single-active-view suspension. Only the selected tab keeps a
-    // live WKWebView; every other tab is dropped to bound memory/process
-    // count to one content view regardless of how many tabs are open. This
-    // loses scroll position and the WKWebView's native back/forward stack
-    // for backgrounded tabs (our own TabHistory still drives our back/
-    // forward buttons correctly on the current page). Upgrade to an
-    // LRU-of-N cache if reload lag on switch-back proves annoying, or skip
-    // suspension for the tab with audio/video playing if that matters.
-    // Ensure the target tab has a view *before* dropping the others: if
-    // creation fails (e.g. WKWebView init error), leaving the previous
-    // tab's view alone is a smaller failure than leaving zero live views.
+    // Ensure the target tab has a view before changing selection. If creation
+    // fails, leaving the previous tab selected is the smaller failure.
     if !ensure_content_view(
         window,
         tabs,
@@ -641,15 +639,59 @@ fn select_content_view(
         return;
     }
 
-    let other_ids: Vec<TabId> = views.keys().copied().filter(|&vid| vid != id).collect();
-    for other_id in other_ids {
-        views.remove(&other_id);
+    if !tabs.select_tab(id) {
+        return;
+    }
+    if let Some(previous) = previous.filter(|&previous| previous != id) {
+        last_active.insert(previous, Instant::now());
     }
 
-    if let Some(view) = views.get(&id) {
-        let _ = view.set_visible(true);
-        let _ = view.focus();
+    for (view_id, view) in views.iter() {
+        let selected = *view_id == id;
+        let _ = view.set_visible(selected);
+        if selected {
+            let _ = view.focus();
+        }
     }
+}
+
+fn sweep_idle_tabs(
+    views: &mut BTreeMap<TabId, WryEngine>,
+    last_active: &BTreeMap<TabId, Instant>,
+    playing_media: &BTreeMap<TabId, bool>,
+    active: Option<TabId>,
+    now: Instant,
+) {
+    views.retain(|id, _| {
+        tab_suspend_deadline(*id, last_active, playing_media, active)
+            .is_none_or(|deadline| deadline > now)
+    });
+}
+
+fn tab_suspend_deadline(
+    id: TabId,
+    last_active: &BTreeMap<TabId, Instant>,
+    playing_media: &BTreeMap<TabId, bool>,
+    active: Option<TabId>,
+) -> Option<Instant> {
+    if active == Some(id) || playing_media.get(&id).copied().unwrap_or(false) {
+        return None;
+    }
+    last_active
+        .get(&id)
+        .map(|last_active| *last_active + TAB_SUSPEND_GRACE)
+}
+
+fn next_tab_suspend_deadline(
+    views: &BTreeMap<TabId, WryEngine>,
+    last_active: &BTreeMap<TabId, Instant>,
+    playing_media: &BTreeMap<TabId, bool>,
+    active: Option<TabId>,
+) -> Option<Instant> {
+    views
+        .keys()
+        .filter_map(|id| tab_suspend_deadline(*id, last_active, playing_media, active))
+        .min()
 }
 
 fn update_history_flags(tabs: &mut TabManager, histories: &BTreeMap<TabId, TabHistory>, id: TabId) {
@@ -713,11 +755,13 @@ fn add_tab(
     events_tx: &Sender<ContentEvent>,
     commands_tx: &Sender<String>,
     theme: &Rc<Cell<Theme>>,
+    last_active: &mut BTreeMap<TabId, Instant>,
     url: &str,
     sidebar_visible: bool,
     search_engine: SearchEngine,
 ) -> wry::Result<TabId> {
     let url = normalize_url(url, search_engine);
+    let previous = tabs.current_id();
     let id = tabs.add_tab(url.clone());
     match create_content_view(
         window,
@@ -729,6 +773,9 @@ fn add_tab(
         theme,
     ) {
         Ok(view) => {
+            if let Some(previous) = previous {
+                last_active.insert(previous, Instant::now());
+            }
             histories.insert(id, TabHistory::new(url));
             views.insert(id, view);
             select_content_view(
@@ -739,6 +786,7 @@ fn add_tab(
                 commands_tx,
                 theme,
                 sidebar_visible,
+                last_active,
                 id,
             );
             Ok(id)
@@ -759,6 +807,8 @@ fn close_tab(
     events_tx: &Sender<ContentEvent>,
     commands_tx: &Sender<String>,
     theme: &Rc<Cell<Theme>>,
+    last_active: &mut BTreeMap<TabId, Instant>,
+    playing_media: &mut BTreeMap<TabId, bool>,
     id: TabId,
     sidebar_visible: bool,
     search_engine: SearchEngine,
@@ -769,6 +819,8 @@ fn close_tab(
 
     views.remove(&id);
     histories.remove(&id);
+    last_active.remove(&id);
+    playing_media.remove(&id);
     tabs.remove_tab(id);
 
     if tabs.current_id().is_none() {
@@ -780,6 +832,7 @@ fn close_tab(
             events_tx,
             commands_tx,
             theme,
+            last_active,
             NEW_TAB_URL,
             sidebar_visible,
             search_engine,
@@ -799,6 +852,7 @@ fn close_tab(
             commands_tx,
             theme,
             sidebar_visible,
+            last_active,
             current,
         );
     }
@@ -924,6 +978,8 @@ fn handle_mcp_request(
     settings: &AppSettings,
     views: &mut BTreeMap<TabId, WryEngine>,
     histories: &mut BTreeMap<TabId, TabHistory>,
+    last_active: &mut BTreeMap<TabId, Instant>,
+    playing_media: &mut BTreeMap<TabId, bool>,
     content_events_tx: &Sender<ContentEvent>,
     commands_tx: &Sender<String>,
     theme: &Rc<Cell<Theme>>,
@@ -955,6 +1011,7 @@ fn handle_mcp_request(
                 content_events_tx,
                 commands_tx,
                 theme,
+                last_active,
                 url.as_deref().unwrap_or(NEW_TAB_URL),
                 sidebar_visible,
                 settings.search_engine,
@@ -990,6 +1047,8 @@ fn handle_mcp_request(
                 content_events_tx,
                 commands_tx,
                 theme,
+                last_active,
+                playing_media,
                 id,
                 sidebar_visible,
                 settings.search_engine,
@@ -1017,6 +1076,7 @@ fn handle_mcp_request(
                     commands_tx,
                     theme,
                     sidebar_visible,
+                    last_active,
                     id,
                 );
                 true
@@ -1155,7 +1215,11 @@ fn handle_mcp_request(
                 let _ = reply.send(Err("target tab has no content view".to_owned()));
                 return;
             }
+            last_active.insert(id, Instant::now());
             let view = views.get(&id).expect("just ensured by ensure_content_view");
+            if tabs.current_id() != Some(id) {
+                let _ = view.set_visible(false);
+            }
 
             let pending_reply = Arc::new(Mutex::new(Some(reply)));
             let callback_reply = Arc::clone(&pending_reply);
@@ -1201,6 +1265,8 @@ fn main() -> wry::Result<()> {
     let current_theme = Rc::new(Cell::new(settings.theme));
     let mut views = BTreeMap::new();
     let mut histories = BTreeMap::new();
+    let mut last_active = BTreeMap::new();
+    let mut playing_media = BTreeMap::new();
     let mut sidebar_visible = true;
     add_tab(
         &window,
@@ -1210,6 +1276,7 @@ fn main() -> wry::Result<()> {
         &content_events_tx,
         &commands_tx,
         &current_theme,
+        &mut last_active,
         &initial_url,
         sidebar_visible,
         settings.search_engine,
@@ -1246,7 +1313,13 @@ fn main() -> wry::Result<()> {
         #[cfg(target_os = "macos")]
         let _keep_app_menu_alive = &app_menu;
 
-        *control_flow = ControlFlow::Wait;
+        *control_flow = next_tab_suspend_deadline(
+            &views,
+            &last_active,
+            &playing_media,
+            tabs.current_id(),
+        )
+        .map_or(ControlFlow::Wait, ControlFlow::WaitUntil);
         match event {
             Event::UserEvent(request) => handle_mcp_request(
                 request,
@@ -1257,6 +1330,8 @@ fn main() -> wry::Result<()> {
                 &settings,
                 &mut views,
                 &mut histories,
+                &mut last_active,
+                &mut playing_media,
                 &content_events_tx,
                 &commands_tx,
                 &current_theme,
@@ -1297,6 +1372,9 @@ fn main() -> wry::Result<()> {
                                 tab.favicon_url = (!url.is_empty()).then_some(url);
                             }
                         }
+                        ContentEvent::MediaPlaybackChanged { id, playing } => {
+                            playing_media.insert(id, playing);
+                        }
                     }
                     send_state(
                         &chrome,
@@ -1328,6 +1406,7 @@ fn main() -> wry::Result<()> {
                                     &commands_tx,
                                     &current_theme,
                                     sidebar_visible,
+                                    &mut last_active,
                                     id,
                                 );
                             }
@@ -1341,6 +1420,7 @@ fn main() -> wry::Result<()> {
                                 &content_events_tx,
                                 &commands_tx,
                                 &current_theme,
+                                &mut last_active,
                                 url.as_deref().unwrap_or(NEW_TAB_URL),
                                 sidebar_visible,
                                 settings.search_engine,
@@ -1369,6 +1449,8 @@ fn main() -> wry::Result<()> {
                                     &content_events_tx,
                                     &commands_tx,
                                     &current_theme,
+                                    &mut last_active,
+                                    &mut playing_media,
                                     id,
                                     sidebar_visible,
                                     settings.search_engine,
@@ -1388,6 +1470,8 @@ fn main() -> wry::Result<()> {
                                     &content_events_tx,
                                     &commands_tx,
                                     &current_theme,
+                                    &mut last_active,
+                                    &mut playing_media,
                                     id,
                                     sidebar_visible,
                                     settings.search_engine,
@@ -1581,12 +1665,11 @@ fn main() -> wry::Result<()> {
                                 settings.locale = locale;
                             }
                         }
-                        // Content-originated favicon_changed messages are intercepted and
-                        // rerouted to ContentEvent::FaviconChanged (with the correct tab id)
-                        // inside create_content_view's IPC handler, never reaching this loop.
-                        // Chrome itself never sends this command. Kept only for match
-                        // exhaustiveness.
-                        ChromeCommand::FaviconChanged { .. } => {}
+                        // Content-originated messages are intercepted and rerouted to a
+                        // ContentEvent with the correct tab id inside create_content_view's
+                        // IPC handler. Chrome itself never sends these commands.
+                        ChromeCommand::FaviconChanged { .. }
+                        | ChromeCommand::MediaPlaybackChanged { .. } => {}
                         ChromeCommand::OpenDevtools => {
                             if let Some(view) = tabs.current_id().and_then(|id| views.get(&id)) {
                                 view.open_devtools();
@@ -1621,6 +1704,14 @@ fn main() -> wry::Result<()> {
                         &mcp_http_state,
                     );
                 }
+
+                sweep_idle_tabs(
+                    &mut views,
+                    &last_active,
+                    &playing_media,
+                    tabs.current_id(),
+                    Instant::now(),
+                );
             }
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::Resized(_) => {
@@ -1652,6 +1743,7 @@ fn main() -> wry::Result<()> {
                                 &content_events_tx,
                                 &commands_tx,
                                 &current_theme,
+                                &mut last_active,
                                 NEW_TAB_URL,
                                 sidebar_visible,
                                 settings.search_engine,
@@ -1732,6 +1824,8 @@ fn main() -> wry::Result<()> {
                                     &content_events_tx,
                                     &commands_tx,
                                     &current_theme,
+                                    &mut last_active,
+                                    &mut playing_media,
                                     id,
                                     sidebar_visible,
                                     settings.search_engine,
@@ -1773,10 +1867,11 @@ fn main() -> wry::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        NEW_TAB_URL, TabHistory, eval_result, internal_page_response, is_only_new_tab,
-        normalize_url, parse_startup_args,
+        NEW_TAB_URL, TAB_SUSPEND_GRACE, TabHistory, eval_result, internal_page_response,
+        is_only_new_tab, normalize_url, parse_startup_args, tab_suspend_deadline,
     };
     use browser_core::{SearchEngine, TabManager, Theme};
+    use std::{collections::BTreeMap, time::Instant};
     use wry::http::{Request, StatusCode, header::CONTENT_TYPE};
 
     fn request_internal_page(url: &str, theme: Theme) -> wry::http::Response<Vec<u8>> {
@@ -1912,6 +2007,30 @@ mod tests {
 
         tabs.add_tab("https://example.com");
         assert!(!is_only_new_tab(&tabs, new_tab));
+    }
+
+    #[test]
+    fn excludes_active_and_playing_tabs_from_suspension() {
+        let mut tabs = TabManager::new();
+        let id = tabs.add_tab("https://example.com");
+        let last_used = Instant::now();
+        let last_active = BTreeMap::from([(id, last_used)]);
+        let mut playing_media = BTreeMap::new();
+
+        assert_eq!(
+            tab_suspend_deadline(id, &last_active, &playing_media, None),
+            Some(last_used + TAB_SUSPEND_GRACE)
+        );
+        assert_eq!(
+            tab_suspend_deadline(id, &last_active, &playing_media, Some(id)),
+            None
+        );
+
+        playing_media.insert(id, true);
+        assert_eq!(
+            tab_suspend_deadline(id, &last_active, &playing_media, None),
+            None
+        );
     }
 
     #[test]
