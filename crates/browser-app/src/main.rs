@@ -1313,13 +1313,7 @@ fn main() -> wry::Result<()> {
         #[cfg(target_os = "macos")]
         let _keep_app_menu_alive = &app_menu;
 
-        *control_flow = next_tab_suspend_deadline(
-            &views,
-            &last_active,
-            &playing_media,
-            tabs.current_id(),
-        )
-        .map_or(ControlFlow::Wait, ControlFlow::WaitUntil);
+        *control_flow = ControlFlow::Wait;
         match event {
             Event::UserEvent(request) => handle_mcp_request(
                 request,
@@ -1860,6 +1854,20 @@ fn main() -> wry::Result<()> {
                 }
             }
             _ => {}
+        }
+
+        // Compute this after handling the event above (not before), so a tab
+        // switch or media-playback update that just happened this iteration
+        // is reflected in the wake-up schedule. Only applies when nothing
+        // above already requested a different flow (e.g. Exit on close).
+        if matches!(*control_flow, ControlFlow::Wait) {
+            *control_flow = next_tab_suspend_deadline(
+                &views,
+                &last_active,
+                &playing_media,
+                tabs.current_id(),
+            )
+            .map_or(ControlFlow::Wait, ControlFlow::WaitUntil);
         }
     });
 }
