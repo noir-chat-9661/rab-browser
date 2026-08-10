@@ -279,9 +279,12 @@ function App() {
   });
 
   createEffect(() => {
-    setTabSuspendGraceMinutes(
-      String(Math.round(state().settings.tabSuspendGraceSecs / 60)),
-    );
+    const secs = state().settings.tabSuspendGraceSecs;
+    // Skip resync while the draft is mid-edit and invalid, so an unrelated
+    // state broadcast (e.g. a tab title update) doesn't wipe out what the
+    // user is currently typing before they've entered a valid value.
+    if (tabSuspendGraceInvalid()) return;
+    setTabSuspendGraceMinutes(String(Math.round(secs / 60)));
   });
 
   const closeLocation = () => {
@@ -867,6 +870,7 @@ function App() {
                           updateTabSuspendGrace();
                         }}
                       />
+                      <span>{t().tabSuspendGraceUnit}</span>
                     </label>
                     <p class="settings-hint">{t().tabSuspendGraceDescription}</p>
                     <Show when={tabSuspendGraceInvalid()}>

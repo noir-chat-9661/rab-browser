@@ -50,7 +50,8 @@ export const translations = {
     clearCookies: "Cookieを削除",
     clearCookiesDescription: "Cookieと閲覧データを削除します。",
     clearCookiesConfirm: "Cookieと閲覧データを削除しますか？この操作は取り消せません。",
-    tabSuspendGrace: "タブのサスペンド猶予(分)",
+    tabSuspendGrace: "タブのサスペンド猶予",
+    tabSuspendGraceUnit: "分",
     tabSuspendGraceDescription:
       "非アクティブなタブをこの時間放置すると、メモリ節約のため裏側のページを一旦破棄します(再生中の音声/動画があるタブは対象外)。次に開いたときは同じURLを再読み込みします。",
     tabSuspendGraceInvalid: "1から60までの分数を入力してください。",
@@ -143,7 +144,8 @@ export const translations = {
     clearCookies: "Clear cookies",
     clearCookiesDescription: "Clear cookies and browsing data.",
     clearCookiesConfirm: "Clear cookies and browsing data? This cannot be undone.",
-    tabSuspendGrace: "Tab suspend delay (minutes)",
+    tabSuspendGrace: "Tab suspend delay",
+    tabSuspendGraceUnit: "minutes",
     tabSuspendGraceDescription:
       "Background tabs left idle this long have their page discarded to save memory (tabs playing audio/video are exempt). Reopening them reloads the same URL.",
     tabSuspendGraceInvalid: "Enter a number of minutes from 1 to 60.",

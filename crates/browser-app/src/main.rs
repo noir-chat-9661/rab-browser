@@ -12,8 +12,8 @@ use std::{
 };
 
 use browser_core::{
-    AppSettings, BookmarkManager, BrowserEngine, HistoryManager, Locale, MAX_TAB_SUSPEND_GRACE_SECS,
-    MIN_TAB_SUSPEND_GRACE_SECS, SearchEngine, TabId, TabManager, Theme,
+    AppSettings, BookmarkManager, BrowserEngine, HistoryManager, Locale,
+    MAX_TAB_SUSPEND_GRACE_SECS, MIN_TAB_SUSPEND_GRACE_SECS, SearchEngine, TabId, TabManager, Theme,
 };
 use browser_engine_wry::WryEngine;
 use browser_mcp_server::{DispatchError, McpHttpHandle, McpRequest, RequestDispatcher, TabInfo};
