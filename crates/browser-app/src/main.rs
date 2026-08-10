@@ -12,8 +12,8 @@ use std::{
 };
 
 use browser_core::{
-    AppSettings, BookmarkManager, BrowserEngine, HistoryManager, Locale, SearchEngine, TabId,
-    TabManager, Theme,
+    AppSettings, BookmarkManager, BrowserEngine, HistoryManager, Locale,
+    MAX_TAB_SUSPEND_GRACE_SECS, MIN_TAB_SUSPEND_GRACE_SECS, SearchEngine, TabId, TabManager, Theme,
 };
 use browser_engine_wry::WryEngine;
 use browser_mcp_server::{DispatchError, McpHttpHandle, McpRequest, RequestDispatcher, TabInfo};
@@ -39,8 +39,6 @@ use wry::{
 const SIDEBAR_WIDTH: f64 = 264.0;
 const INTERNAL_PROTOCOL: &str = "rab";
 const NEW_TAB_URL: &str = "rab://newtab/";
-// Keep this easy to tune once real-world tab switching behavior is measured.
-const TAB_SUSPEND_GRACE: Duration = Duration::from_secs(30);
 
 struct ProxyDispatcher(EventLoopProxy<McpRequest>);
 
@@ -76,6 +74,7 @@ enum ChromeCommand {
     SetTheme { theme: String },
     SetMcpHttp { enabled: bool, port: u16 },
     SetLocale { locale: String },
+    SetTabSuspendGrace { secs: u64 },
     FaviconChanged { url: String },
     MediaPlaybackChanged { playing: bool },
     OpenDevtools,
@@ -147,6 +146,7 @@ struct ChromeSettings<'a> {
     search_engine: &'a str,
     theme: &'a str,
     locale: &'a str,
+    tab_suspend_grace_secs: u64,
 }
 
 #[derive(Debug)]
@@ -660,26 +660,32 @@ fn sweep_idle_tabs(
     last_active: &BTreeMap<TabId, Instant>,
     playing_media: &BTreeMap<TabId, bool>,
     active: Option<TabId>,
+    grace: Duration,
     now: Instant,
 ) {
     views.retain(|id, _| {
-        tab_suspend_deadline(*id, last_active, playing_media, active)
+        tab_suspend_deadline(*id, last_active, playing_media, active, grace)
             .is_none_or(|deadline| deadline > now)
     });
 }
 
+/// Deliberately reads only `last_active` (when a tab last lost focus), never
+/// looking at whether it's currently missing from `views`. Suspension is a
+/// one-way street: once dropped, a tab is only recreated on demand
+/// (`ensure_content_view`), never resurrected by a later grace-period
+/// increase in settings. This function only ever *schedules* removals, so
+/// there is nothing here that could undo one.
 fn tab_suspend_deadline(
     id: TabId,
     last_active: &BTreeMap<TabId, Instant>,
     playing_media: &BTreeMap<TabId, bool>,
     active: Option<TabId>,
+    grace: Duration,
 ) -> Option<Instant> {
     if active == Some(id) || playing_media.get(&id).copied().unwrap_or(false) {
         return None;
     }
-    last_active
-        .get(&id)
-        .map(|last_active| *last_active + TAB_SUSPEND_GRACE)
+    last_active.get(&id).map(|last_active| *last_active + grace)
 }
 
 fn next_tab_suspend_deadline(
@@ -687,10 +693,11 @@ fn next_tab_suspend_deadline(
     last_active: &BTreeMap<TabId, Instant>,
     playing_media: &BTreeMap<TabId, bool>,
     active: Option<TabId>,
+    grace: Duration,
 ) -> Option<Instant> {
     views
         .keys()
-        .filter_map(|id| tab_suspend_deadline(*id, last_active, playing_media, active))
+        .filter_map(|id| tab_suspend_deadline(*id, last_active, playing_media, active, grace))
         .min()
 }
 
@@ -739,6 +746,7 @@ fn send_state(
             search_engine: settings.search_engine.as_str(),
             theme: settings.theme.as_str(),
             locale: settings.locale.as_str(),
+            tab_suspend_grace_secs: settings.tab_suspend_grace_secs,
         },
     };
     if let Ok(json) = serde_json::to_string(&state) {
@@ -1617,6 +1625,14 @@ fn main() -> wry::Result<()> {
                                 current_theme.set(theme);
                             }
                         }
+                        ChromeCommand::SetTabSuspendGrace { secs } => {
+                            // Lowering/raising this only changes future deadlines
+                            // (tab_suspend_deadline reads last_active + grace fresh
+                            // each sweep); it never resurrects a tab already
+                            // suspended under the old value.
+                            settings.tab_suspend_grace_secs =
+                                secs.clamp(MIN_TAB_SUSPEND_GRACE_SECS, MAX_TAB_SUSPEND_GRACE_SECS);
+                        }
                         ChromeCommand::SetMcpHttp { enabled, port } => {
                             if let Some(handle) = mcp_http.take() {
                                 // Graceful shutdown waits for in-flight requests to finish,
@@ -1704,6 +1720,7 @@ fn main() -> wry::Result<()> {
                     &last_active,
                     &playing_media,
                     tabs.current_id(),
+                    Duration::from_secs(settings.tab_suspend_grace_secs),
                     Instant::now(),
                 );
             }
@@ -1866,6 +1883,7 @@ fn main() -> wry::Result<()> {
                 &last_active,
                 &playing_media,
                 tabs.current_id(),
+                Duration::from_secs(settings.tab_suspend_grace_secs),
             )
             .map_or(ControlFlow::Wait, ControlFlow::WaitUntil);
         }
@@ -1875,11 +1893,14 @@ fn main() -> wry::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        NEW_TAB_URL, TAB_SUSPEND_GRACE, TabHistory, eval_result, internal_page_response,
-        is_only_new_tab, normalize_url, parse_startup_args, tab_suspend_deadline,
+        NEW_TAB_URL, TabHistory, eval_result, internal_page_response, is_only_new_tab,
+        normalize_url, parse_startup_args, tab_suspend_deadline,
     };
-    use browser_core::{SearchEngine, TabManager, Theme};
-    use std::{collections::BTreeMap, time::Instant};
+    use browser_core::{DEFAULT_TAB_SUSPEND_GRACE_SECS, SearchEngine, TabManager, Theme};
+    use std::{
+        collections::BTreeMap,
+        time::{Duration, Instant},
+    };
     use wry::http::{Request, StatusCode, header::CONTENT_TYPE};
 
     fn request_internal_page(url: &str, theme: Theme) -> wry::http::Response<Vec<u8>> {
@@ -2025,18 +2046,19 @@ mod tests {
         let last_active = BTreeMap::from([(id, last_used)]);
         let mut playing_media = BTreeMap::new();
 
+        let grace = Duration::from_secs(DEFAULT_TAB_SUSPEND_GRACE_SECS);
         assert_eq!(
-            tab_suspend_deadline(id, &last_active, &playing_media, None),
-            Some(last_used + TAB_SUSPEND_GRACE)
+            tab_suspend_deadline(id, &last_active, &playing_media, None, grace),
+            Some(last_used + grace)
         );
         assert_eq!(
-            tab_suspend_deadline(id, &last_active, &playing_media, Some(id)),
+            tab_suspend_deadline(id, &last_active, &playing_media, Some(id), grace),
             None
         );
 
         playing_media.insert(id, true);
         assert_eq!(
-            tab_suspend_deadline(id, &last_active, &playing_media, None),
+            tab_suspend_deadline(id, &last_active, &playing_media, None, grace),
             None
         );
     }
