@@ -563,6 +563,45 @@ fn bring_chrome_to_front(chrome: &WebView) {
 #[cfg(not(target_os = "macos"))]
 fn bring_chrome_to_front(_chrome: &WebView) {}
 
+/// Recreates a suspended tab's WKWebView on demand (navigated back to its
+/// last known URL) if it doesn't already have one. Used both when the user
+/// switches to a tab and when MCP targets a backgrounded tab directly — the
+/// latter doesn't go through `select_content_view`'s single-view sweep, so
+/// it can leave more than one live view around until the next real tab
+/// switch cleans it up. That's fine: MCP touching a background tab is rare
+/// and short-lived, not the steady-state memory cost this feature targets.
+#[allow(clippy::too_many_arguments)]
+fn ensure_content_view(
+    window: &Window,
+    tabs: &TabManager,
+    views: &mut BTreeMap<TabId, WryEngine>,
+    events_tx: &Sender<ContentEvent>,
+    commands_tx: &Sender<String>,
+    theme: &Rc<Cell<Theme>>,
+    sidebar_visible: bool,
+    id: TabId,
+) -> bool {
+    if views.contains_key(&id) {
+        return true;
+    }
+    let Some(url) = tabs.tab(id).map(|tab| tab.url.clone()) else {
+        return false;
+    };
+    let Ok(view) = create_content_view(
+        window,
+        id,
+        &url,
+        sidebar_visible,
+        events_tx,
+        commands_tx,
+        theme,
+    ) else {
+        return false;
+    };
+    views.insert(id, view);
+    true
+}
+
 #[allow(clippy::too_many_arguments)]
 fn select_content_view(
     window: &Window,
@@ -591,22 +630,17 @@ fn select_content_view(
         views.remove(&other_id);
     }
 
-    if let std::collections::btree_map::Entry::Vacant(entry) = views.entry(id) {
-        let Some(url) = tabs.tab(id).map(|tab| tab.url.clone()) else {
-            return;
-        };
-        let Ok(view) = create_content_view(
-            window,
-            id,
-            &url,
-            sidebar_visible,
-            events_tx,
-            commands_tx,
-            theme,
-        ) else {
-            return;
-        };
-        entry.insert(view);
+    if !ensure_content_view(
+        window,
+        tabs,
+        views,
+        events_tx,
+        commands_tx,
+        theme,
+        sidebar_visible,
+        id,
+    ) {
+        return;
     }
 
     if let Some(view) = views.get(&id) {
@@ -1105,10 +1139,20 @@ fn handle_mcp_request(
                 let _ = reply.send(Err(message.to_owned()));
                 return;
             };
-            let Some(view) = views.get(&id) else {
+            if !ensure_content_view(
+                window,
+                tabs,
+                views,
+                content_events_tx,
+                commands_tx,
+                theme,
+                sidebar_visible,
+                id,
+            ) {
                 let _ = reply.send(Err("target tab has no content view".to_owned()));
                 return;
-            };
+            }
+            let view = views.get(&id).expect("just ensured by ensure_content_view");
 
             let pending_reply = Arc::new(Mutex::new(Some(reply)));
             let callback_reply = Arc::clone(&pending_reply);
