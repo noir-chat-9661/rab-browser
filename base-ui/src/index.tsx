@@ -26,7 +26,16 @@ type Bookmark = {
 
 type SearchEngine = "google" | "duckduckgo" | "bing";
 type Theme = "dark" | "light";
-type McpClient = "claude_desktop" | "claude_code" | "cursor";
+type McpClient =
+  | "claude_desktop"
+  | "claude_code"
+  | "cursor"
+  | "windsurf"
+  | "cline"
+  | "antigravity"
+  | "zed"
+  | "codex"
+  | "opencode";
 type SettingsCategory =
   | "language"
   | "search"
@@ -159,6 +168,12 @@ const mcpClients: McpClient[] = [
   "claude_desktop",
   "claude_code",
   "cursor",
+  "windsurf",
+  "cline",
+  "antigravity",
+  "zed",
+  "codex",
+  "opencode",
 ];
 
 function App() {

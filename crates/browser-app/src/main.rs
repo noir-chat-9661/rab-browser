@@ -977,6 +977,14 @@ fn mcp_client_config_path(home: &Path, client: &str) -> Option<PathBuf> {
         }
         "claude_code" => Some(home.join(".claude.json")),
         "cursor" => Some(home.join(".cursor/mcp.json")),
+        "windsurf" => Some(home.join(".codeium/windsurf/mcp_config.json")),
+        "cline" => Some(home.join(
+            "Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+        )),
+        "antigravity" => Some(home.join(".gemini/config/mcp_config.json")),
+        "zed" => Some(home.join(".config/zed/settings.json")),
+        "codex" => Some(home.join(".codex/config.toml")),
+        "opencode" => Some(home.join(".config/opencode/opencode.json")),
         _ => None,
     }
 }
@@ -1018,6 +1026,124 @@ fn merge_mcp_client_config(path: &Path, executable: &Path) -> io::Result<()> {
     fs::write(path, contents)
 }
 
+fn merge_zed_mcp_config(path: &Path, executable: &Path) -> io::Result<()> {
+    let mut config = match fs::read_to_string(path) {
+        Ok(contents) => serde_json::from_str::<serde_json::Value>(&contents)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?,
+        Err(error) if error.kind() == ErrorKind::NotFound => serde_json::json!({}),
+        Err(error) => return Err(error),
+    };
+    let config_object = config.as_object_mut().ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            "configuration root must be a JSON object",
+        )
+    })?;
+    let context_servers = config_object
+        .entry("context_servers")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                "context_servers must be a JSON object",
+            )
+        })?;
+    context_servers.insert(
+        "rab-browser".to_owned(),
+        serde_json::json!({
+            "source": "custom",
+            "command": executable.to_string_lossy(),
+            "args": ["--mcp"],
+        }),
+    );
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut contents = serde_json::to_string_pretty(&config)
+        .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+    contents.push('\n');
+    fs::write(path, contents)
+}
+
+fn merge_codex_mcp_config(path: &Path, executable: &Path) -> io::Result<()> {
+    let mut config = match fs::read_to_string(path) {
+        Ok(contents) => toml::from_str::<toml::Value>(&contents)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            toml::Value::Table(toml::map::Map::new())
+        }
+        Err(error) => return Err(error),
+    };
+    let config_table = config.as_table_mut().ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            "configuration root must be a TOML table",
+        )
+    })?;
+    let mcp_servers = config_table
+        .entry("mcp_servers")
+        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+        .as_table_mut()
+        .ok_or_else(|| {
+            io::Error::new(ErrorKind::InvalidData, "mcp_servers must be a TOML table")
+        })?;
+    let mut server = toml::map::Map::new();
+    server.insert(
+        "command".to_owned(),
+        toml::Value::String(executable.to_string_lossy().into_owned()),
+    );
+    server.insert(
+        "args".to_owned(),
+        toml::Value::Array(vec![toml::Value::String("--mcp".to_owned())]),
+    );
+    mcp_servers.insert("rab-browser".to_owned(), toml::Value::Table(server));
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let contents = toml::to_string_pretty(&config)
+        .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+    fs::write(path, contents)
+}
+
+fn merge_opencode_mcp_config(path: &Path, executable: &Path) -> io::Result<()> {
+    let mut config = match fs::read_to_string(path) {
+        Ok(contents) => serde_json::from_str::<serde_json::Value>(&contents)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?,
+        Err(error) if error.kind() == ErrorKind::NotFound => serde_json::json!({}),
+        Err(error) => return Err(error),
+    };
+    let config_object = config.as_object_mut().ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            "configuration root must be a JSON object",
+        )
+    })?;
+    let mcp = config_object
+        .entry("mcp")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "mcp must be a JSON object"))?;
+    mcp.insert(
+        "rab-browser".to_owned(),
+        serde_json::json!({
+            "type": "local",
+            "command": [executable.to_string_lossy(), "--mcp"],
+            "enabled": true,
+        }),
+    );
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut contents = serde_json::to_string_pretty(&config)
+        .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+    contents.push('\n');
+    fs::write(path, contents)
+}
+
 fn register_mcp_clients(
     home: &Path,
     executable: &Path,
@@ -1036,7 +1162,13 @@ fn register_mcp_clients(
             });
             continue;
         };
-        match merge_mcp_client_config(&path, executable) {
+        let merge_result = match client.as_str() {
+            "zed" => merge_zed_mcp_config(&path, executable),
+            "codex" => merge_codex_mcp_config(&path, executable),
+            "opencode" => merge_opencode_mcp_config(&path, executable),
+            _ => merge_mcp_client_config(&path, executable),
+        };
+        match merge_result {
             Ok(()) => result.registered.push(client.clone()),
             Err(error) => result.errors.push(McpRegistrationError {
                 client: client.clone(),
@@ -2024,7 +2156,8 @@ fn main() -> wry::Result<()> {
 mod tests {
     use super::{
         NEW_TAB_URL, TabHistory, eval_result, internal_page_response, is_only_new_tab,
-        merge_mcp_client_config, normalize_url, parse_startup_args, register_mcp_clients,
+        merge_codex_mcp_config, merge_mcp_client_config, merge_opencode_mcp_config,
+        merge_zed_mcp_config, normalize_url, parse_startup_args, register_mcp_clients,
         tab_suspend_deadline,
     };
     use browser_core::{DEFAULT_TAB_SUSPEND_GRACE_SECS, SearchEngine, TabManager, Theme};
@@ -2064,6 +2197,10 @@ mod tests {
 
     fn read_json(path: &std::path::Path) -> serde_json::Value {
         serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn read_toml(path: &std::path::Path) -> toml::Value {
+        toml::from_str(&fs::read_to_string(path).unwrap()).unwrap()
     }
 
     #[test]
@@ -2135,6 +2272,248 @@ mod tests {
             serde_json::json!({"command": "/opt/rab-browser", "args": ["--mcp"]})
         );
         assert!(home.0.join(".claude.json").is_file());
+    }
+
+    #[test]
+    fn creates_missing_windsurf_cline_and_antigravity_configs() {
+        let home = TestDir::new();
+        let clients = ["windsurf", "cline", "antigravity"].map(str::to_owned);
+
+        let result =
+            register_mcp_clients(&home.0, std::path::Path::new("/opt/rab-browser"), &clients);
+
+        assert_eq!(result.registered, clients);
+        assert!(result.errors.is_empty());
+        let paths = [
+            home.0.join(".codeium/windsurf/mcp_config.json"),
+            home.0.join(
+                "Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+            ),
+            home.0.join(".gemini/config/mcp_config.json"),
+        ];
+        for path in paths {
+            assert_eq!(
+                read_json(&path)["mcpServers"]["rab-browser"],
+                serde_json::json!({
+                    "command": "/opt/rab-browser",
+                    "args": ["--mcp"]
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn preserves_existing_windsurf_cline_and_antigravity_configs() {
+        let home = TestDir::new();
+        let paths = [
+            home.0.join(".codeium/windsurf/mcp_config.json"),
+            home.0.join(
+                "Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+            ),
+            home.0.join(".gemini/config/mcp_config.json"),
+        ];
+        for path in &paths {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(
+                path,
+                r#"{"theme":"dark","mcpServers":{"other":{"command":"other"}}}"#,
+            )
+            .unwrap();
+        }
+        let clients = ["windsurf", "cline", "antigravity"].map(str::to_owned);
+
+        let result =
+            register_mcp_clients(&home.0, std::path::Path::new("/opt/rab-browser"), &clients);
+
+        assert_eq!(result.registered, clients);
+        assert!(result.errors.is_empty());
+        for path in paths {
+            let config = read_json(&path);
+            assert_eq!(config["theme"], "dark");
+            assert_eq!(
+                config["mcpServers"]["other"],
+                serde_json::json!({"command": "other"})
+            );
+            assert_eq!(
+                config["mcpServers"]["rab-browser"],
+                serde_json::json!({
+                    "command": "/opt/rab-browser",
+                    "args": ["--mcp"]
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn creates_a_missing_zed_config() {
+        let home = TestDir::new();
+        let path = home.0.join(".config/zed/settings.json");
+        let clients = ["zed".to_owned()];
+
+        let result =
+            register_mcp_clients(&home.0, std::path::Path::new("/opt/rab-browser"), &clients);
+
+        assert_eq!(result.registered, clients);
+        assert!(result.errors.is_empty());
+        assert_eq!(
+            read_json(&path),
+            serde_json::json!({
+                "context_servers": {
+                    "rab-browser": {
+                        "source": "custom",
+                        "command": "/opt/rab-browser",
+                        "args": ["--mcp"]
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn preserves_existing_zed_settings_and_context_servers() {
+        let home = TestDir::new();
+        let path = home.0.join(".config/zed/settings.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"ui_font_size":16,"theme":{"mode":"dark"},"context_servers":{"other":{"source":"custom","command":"other"}}}"#,
+        )
+        .unwrap();
+
+        merge_zed_mcp_config(&path, std::path::Path::new("/opt/rab-browser")).unwrap();
+
+        let config = read_json(&path);
+        assert_eq!(config["ui_font_size"], 16);
+        assert_eq!(config["theme"], serde_json::json!({"mode": "dark"}));
+        assert_eq!(
+            config["context_servers"]["other"],
+            serde_json::json!({"source": "custom", "command": "other"})
+        );
+        assert_eq!(
+            config["context_servers"]["rab-browser"],
+            serde_json::json!({
+                "source": "custom",
+                "command": "/opt/rab-browser",
+                "args": ["--mcp"]
+            })
+        );
+    }
+
+    #[test]
+    fn creates_a_missing_codex_config() {
+        let home = TestDir::new();
+        let path = home.0.join(".codex/config.toml");
+        let clients = ["codex".to_owned()];
+
+        let result =
+            register_mcp_clients(&home.0, std::path::Path::new("/opt/rab-browser"), &clients);
+
+        assert_eq!(result.registered, clients);
+        assert!(result.errors.is_empty());
+        let config = read_toml(&path);
+        assert_eq!(
+            config["mcp_servers"]["rab-browser"]["command"].as_str(),
+            Some("/opt/rab-browser")
+        );
+        assert_eq!(
+            config["mcp_servers"]["rab-browser"]["args"]
+                .as_array()
+                .unwrap(),
+            &[toml::Value::String("--mcp".to_owned())]
+        );
+    }
+
+    #[test]
+    fn preserves_existing_codex_settings_and_mcp_servers() {
+        let home = TestDir::new();
+        let path = home.0.join(".codex/config.toml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"model = "gpt-5"
+
+[history]
+persistence = "save-all"
+
+[mcp_servers.other]
+command = "other"
+args = ["--serve"]
+"#,
+        )
+        .unwrap();
+
+        merge_codex_mcp_config(&path, std::path::Path::new("/opt/rab-browser")).unwrap();
+
+        let config = read_toml(&path);
+        assert_eq!(config["model"].as_str(), Some("gpt-5"));
+        assert_eq!(config["history"]["persistence"].as_str(), Some("save-all"));
+        assert_eq!(
+            config["mcp_servers"]["other"]["command"].as_str(),
+            Some("other")
+        );
+        assert_eq!(
+            config["mcp_servers"]["other"]["args"].as_array().unwrap(),
+            &[toml::Value::String("--serve".to_owned())]
+        );
+        assert_eq!(
+            config["mcp_servers"]["rab-browser"]["command"].as_str(),
+            Some("/opt/rab-browser")
+        );
+    }
+
+    #[test]
+    fn creates_a_missing_opencode_config() {
+        let home = TestDir::new();
+        let path = home.0.join(".config/opencode/opencode.json");
+        let clients = ["opencode".to_owned()];
+
+        let result =
+            register_mcp_clients(&home.0, std::path::Path::new("/opt/rab-browser"), &clients);
+
+        assert_eq!(result.registered, clients);
+        assert!(result.errors.is_empty());
+        assert_eq!(
+            read_json(&path),
+            serde_json::json!({
+                "mcp": {
+                    "rab-browser": {
+                        "type": "local",
+                        "command": ["/opt/rab-browser", "--mcp"],
+                        "enabled": true
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn preserves_existing_opencode_settings_and_mcp_servers() {
+        let home = TestDir::new();
+        let path = home.0.join(".config/opencode/opencode.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"theme":"system","provider":{"anthropic":{"options":{"timeout":30000}}},"mcp":{"other":{"type":"local","command":["other"]}}}"#,
+        )
+        .unwrap();
+
+        merge_opencode_mcp_config(&path, std::path::Path::new("/opt/rab-browser")).unwrap();
+
+        let config = read_json(&path);
+        assert_eq!(config["theme"], "system");
+        assert_eq!(config["provider"]["anthropic"]["options"]["timeout"], 30000);
+        assert_eq!(
+            config["mcp"]["other"],
+            serde_json::json!({"type": "local", "command": ["other"]})
+        );
+        assert_eq!(
+            config["mcp"]["rab-browser"],
+            serde_json::json!({
+                "type": "local",
+                "command": ["/opt/rab-browser", "--mcp"],
+                "enabled": true
+            })
+        );
     }
 
     #[test]
