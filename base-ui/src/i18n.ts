@@ -71,6 +71,22 @@ export const translations = {
     mcpDisabled: "無効",
     mcpEnabledDescription: "MCPサーバーは標準入出力で接続を待っています。",
     mcpDisabledDescription: "MCPを利用するには、オプションを指定してrab-browserを再起動してください。",
+    mcpRegisterClients: "MCPクライアントに登録",
+    mcpRegisterDescription:
+      "このrab-browserをstdio方式のMCPサーバーとして、対応クライアントの設定へ追加します。",
+    mcpRegisterButton: "登録",
+    mcpRegisterDialogTitle: "登録先を選択",
+    mcpRegisterDialogDescription:
+      "rab-browserを登録するMCPクライアントを選んでください。既存の他のサーバー設定は保持されます。",
+    mcpRegisterCancel: "キャンセル",
+    mcpRegisterSubmit: "選択したクライアントに登録",
+    mcpRegisterSuccess: "登録しました",
+    mcpRegisterError: "登録できませんでした",
+    mcpClients: {
+      claude_desktop: "Claude Desktop",
+      claude_code: "Claude Code CLI",
+      cursor: "Cursor",
+    },
     mcpHttpToggle: "Streamable HTTPを有効にする",
     mcpHttpDescription:
       "起動中のrab-browserへ、ローカルのMCPクライアントから接続できます。stdio方式と同時に利用できます。",
@@ -165,6 +181,22 @@ export const translations = {
     mcpDisabled: "Disabled",
     mcpEnabledDescription: "The MCP server is waiting for a connection over standard I/O.",
     mcpDisabledDescription: "Restart rab-browser with an enablement option to use MCP.",
+    mcpRegisterClients: "Register with MCP clients",
+    mcpRegisterDescription:
+      "Add this rab-browser executable to supported clients as a stdio MCP server.",
+    mcpRegisterButton: "Register",
+    mcpRegisterDialogTitle: "Choose clients",
+    mcpRegisterDialogDescription:
+      "Select the MCP clients where rab-browser should be registered. Other existing server settings will be preserved.",
+    mcpRegisterCancel: "Cancel",
+    mcpRegisterSubmit: "Register with selected clients",
+    mcpRegisterSuccess: "Registered successfully",
+    mcpRegisterError: "Could not register",
+    mcpClients: {
+      claude_desktop: "Claude Desktop",
+      claude_code: "Claude Code CLI",
+      cursor: "Cursor",
+    },
     mcpHttpToggle: "Enable Streamable HTTP",
     mcpHttpDescription:
       "Connect to the running rab-browser from a local MCP client. This can run alongside stdio mode.",
