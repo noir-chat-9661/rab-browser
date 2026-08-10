@@ -26,6 +26,7 @@ type Bookmark = {
 
 type SearchEngine = "google" | "duckduckgo" | "bing";
 type Theme = "dark" | "light";
+type McpClient = "claude_desktop" | "claude_code" | "cursor";
 type SettingsCategory =
   | "language"
   | "search"
@@ -45,6 +46,10 @@ type BrowserState = {
     port: number;
     error: string | null;
   };
+  mcpRegistration: {
+    registered: McpClient[];
+    errors: { client: string; message: string }[];
+  } | null;
   settings: {
     searchEngine: SearchEngine;
     theme: Theme;
@@ -78,6 +83,7 @@ const emptyState: BrowserState = {
     port: 8765,
     error: null,
   },
+  mcpRegistration: null,
   settings: {
     searchEngine: "google",
     theme: "dark",
@@ -149,6 +155,12 @@ const locales: Locale[] = [
   "english",
 ];
 
+const mcpClients: McpClient[] = [
+  "claude_desktop",
+  "claude_code",
+  "cursor",
+];
+
 function App() {
   const [state, setState] = createSignal(emptyState);
   const [locationOpen, setLocationOpen] = createSignal(false);
@@ -158,6 +170,9 @@ function App() {
   const [locationValue, setLocationValue] = createSignal("");
   const [mcpHttpPort, setMcpHttpPort] = createSignal("8765");
   const [mcpHttpPortInvalid, setMcpHttpPortInvalid] = createSignal(false);
+  const [mcpRegistrationOpen, setMcpRegistrationOpen] = createSignal(false);
+  const [selectedMcpClients, setSelectedMcpClients] =
+    createSignal<McpClient[]>([]);
   const [tabSuspendGraceMinutes, setTabSuspendGraceMinutes] = createSignal("5");
   const [tabSuspendGraceInvalid, setTabSuspendGraceInvalid] = createSignal(false);
   const [confirmDialog, setConfirmDialog] = createSignal<{
@@ -170,6 +185,9 @@ function App() {
   let confirmCancelButton: HTMLButtonElement | undefined;
   let confirmOkButton: HTMLButtonElement | undefined;
   let confirmDialogPreviouslyFocused: HTMLElement | null = null;
+  let mcpRegistrationDialog: HTMLElement | undefined;
+  let mcpRegistrationFirstCheckbox: HTMLInputElement | undefined;
+  let mcpRegistrationPreviouslyFocused: HTMLElement | null = null;
   const t = createMemo(() => translations[state().settings.locale]);
 
   // wry's WKUIDelegate does not implement the JS confirm/alert panels, so
@@ -202,6 +220,49 @@ function App() {
       ? confirmOkButton
       : confirmCancelButton
     )?.focus();
+  };
+
+  const openMcpRegistration = () => {
+    mcpRegistrationPreviouslyFocused = document.activeElement as HTMLElement | null;
+    setSelectedMcpClients([...mcpClients]);
+    setMcpRegistrationOpen(true);
+    queueMicrotask(() => mcpRegistrationFirstCheckbox?.focus());
+  };
+  const closeMcpRegistration = () => {
+    setMcpRegistrationOpen(false);
+    mcpRegistrationPreviouslyFocused?.focus();
+    mcpRegistrationPreviouslyFocused = null;
+  };
+  const toggleMcpClient = (client: McpClient, checked: boolean) => {
+    setSelectedMcpClients((selected) =>
+      checked
+        ? [...selected, client]
+        : selected.filter((candidate) => candidate !== client),
+    );
+  };
+  const registerMcpClients = () => {
+    const clients = selectedMcpClients();
+    if (clients.length === 0) return;
+    send({ type: "register_mcp_clients", clients });
+    closeMcpRegistration();
+  };
+  const trapMcpRegistrationTab = (event: KeyboardEvent) => {
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(
+      mcpRegistrationDialog?.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), input:not(:disabled)',
+      ) ?? [],
+    );
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   };
 
   const selectSettingsCategory = (category: SettingsCategory) => {
@@ -348,6 +409,11 @@ function App() {
 
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
+        if (mcpRegistrationOpen()) {
+          event.preventDefault();
+          closeMcpRegistration();
+          return;
+        }
         if (confirmDialog()) {
           event.preventDefault();
           closeConfirmDialog();
@@ -915,6 +981,45 @@ function App() {
                         </p>
                       </div>
                     </div>
+                    <div class="mcp-registration-block">
+                      <div>
+                        <h3>{t().mcpRegisterClients}</h3>
+                        <p>{t().mcpRegisterDescription}</p>
+                      </div>
+                      <button type="button" onClick={openMcpRegistration}>
+                        {t().mcpRegisterButton}
+                      </button>
+                      <Show when={state().mcpRegistration}>
+                        {(registration) => (
+                          <div class="mcp-registration-feedback">
+                            <Show when={registration().registered.length > 0}>
+                              <p class="mcp-registration-success" role="status">
+                                <strong>{t().mcpRegisterSuccess}:</strong>{" "}
+                                {registration()
+                                  .registered.map((client) => t().mcpClients[client])
+                                  .join(", ")}
+                              </p>
+                            </Show>
+                            <For each={registration().errors}>
+                              {(error) => (
+                                <p class="mcp-http-error" role="alert">
+                                  <strong>
+                                    {t().mcpRegisterError} ({
+                                      error.client in t().mcpClients
+                                        ? t().mcpClients[
+                                            error.client as McpClient
+                                          ]
+                                        : error.client
+                                    }):
+                                  </strong>{" "}
+                                  {error.message}
+                                </p>
+                              )}
+                            </For>
+                          </div>
+                        )}
+                      </Show>
+                    </div>
                     <div class="mcp-http-block">
                       <div class="mcp-http-heading">
                         <div>
@@ -1005,6 +1110,64 @@ function App() {
                   </section>
                 </Show>
               </div>
+            </div>
+          </section>
+        </div>
+      </Show>
+
+      <Show when={mcpRegistrationOpen()}>
+        <div class="palette-backdrop confirm-backdrop" onClick={closeMcpRegistration}>
+          <section
+            ref={mcpRegistrationDialog}
+            class="confirm-dialog mcp-registration-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="mcp-registration-title"
+            aria-describedby="mcp-registration-description"
+            onKeyDown={trapMcpRegistrationTab}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2 id="mcp-registration-title">{t().mcpRegisterDialogTitle}</h2>
+            <p id="mcp-registration-description">
+              {t().mcpRegisterDialogDescription}
+            </p>
+            <div class="mcp-client-options">
+              <For each={mcpClients}>
+                {(client) => (
+                  <label>
+                    <input
+                      ref={(element) => {
+                        if (client === "claude_desktop") {
+                          mcpRegistrationFirstCheckbox = element;
+                        }
+                      }}
+                      type="checkbox"
+                      checked={selectedMcpClients().includes(client)}
+                      onChange={(event) =>
+                        toggleMcpClient(client, event.currentTarget.checked)
+                      }
+                    />
+                    <span>{t().mcpClients[client]}</span>
+                  </label>
+                )}
+              </For>
+            </div>
+            <div class="confirm-dialog-actions">
+              <button
+                type="button"
+                class="confirm-dialog-cancel"
+                onClick={closeMcpRegistration}
+              >
+                {t().mcpRegisterCancel}
+              </button>
+              <button
+                type="button"
+                class="confirm-dialog-ok mcp-registration-submit"
+                disabled={selectedMcpClients().length === 0}
+                onClick={registerMcpClients}
+              >
+                {t().mcpRegisterSubmit}
+              </button>
             </div>
           </section>
         </div>

@@ -2,7 +2,9 @@ use std::{
     cell::Cell,
     collections::BTreeMap,
     env, fs,
+    io::{self, ErrorKind},
     net::{Ipv4Addr, TcpListener},
+    path::{Path, PathBuf},
     rc::Rc,
     sync::{
         Arc, Mutex,
@@ -73,6 +75,7 @@ enum ChromeCommand {
     SetSearchEngine { engine: String },
     SetTheme { theme: String },
     SetMcpHttp { enabled: bool, port: u16 },
+    RegisterMcpClients { clients: Vec<String> },
     SetLocale { locale: String },
     SetTabSuspendGrace { secs: u64 },
     FaviconChanged { url: String },
@@ -101,6 +104,7 @@ struct ChromeState<'a> {
     bookmarks: Vec<ChromeBookmark<'a>>,
     mcp_enabled: bool,
     mcp_http: &'a McpHttpState,
+    mcp_registration: &'a Option<McpRegistrationState>,
     settings: ChromeSettings<'a>,
 }
 
@@ -110,6 +114,8 @@ struct McpHttpState {
     enabled: bool,
     port: u16,
     error: Option<String>,
+    #[serde(skip)]
+    registration: Option<McpRegistrationState>,
 }
 
 impl Default for McpHttpState {
@@ -118,8 +124,23 @@ impl Default for McpHttpState {
             enabled: false,
             port: 8765,
             error: None,
+            registration: None,
         }
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct McpRegistrationState {
+    registered: Vec<String>,
+    errors: Vec<McpRegistrationError>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct McpRegistrationError {
+    client: String,
+    message: String,
 }
 
 #[derive(Serialize)]
@@ -742,6 +763,7 @@ fn send_state(
             .collect(),
         mcp_enabled,
         mcp_http,
+        mcp_registration: &mcp_http.registration,
         settings: ChromeSettings {
             search_engine: settings.search_engine.as_str(),
             theme: settings.theme.as_str(),
@@ -946,6 +968,84 @@ fn parse_startup_args(args: impl IntoIterator<Item = String>) -> (bool, String) 
         mcp_enabled,
         initial_url.unwrap_or_else(|| NEW_TAB_URL.to_owned()),
     )
+}
+
+fn mcp_client_config_path(home: &Path, client: &str) -> Option<PathBuf> {
+    match client {
+        "claude_desktop" => {
+            Some(home.join("Library/Application Support/Claude/claude_desktop_config.json"))
+        }
+        "claude_code" => Some(home.join(".claude.json")),
+        "cursor" => Some(home.join(".cursor/mcp.json")),
+        _ => None,
+    }
+}
+
+fn merge_mcp_client_config(path: &Path, executable: &Path) -> io::Result<()> {
+    let mut config = match fs::read_to_string(path) {
+        Ok(contents) => serde_json::from_str::<serde_json::Value>(&contents)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?,
+        Err(error) if error.kind() == ErrorKind::NotFound => serde_json::json!({}),
+        Err(error) => return Err(error),
+    };
+    let config_object = config.as_object_mut().ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            "configuration root must be a JSON object",
+        )
+    })?;
+    let mcp_servers = config_object
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| {
+            io::Error::new(ErrorKind::InvalidData, "mcpServers must be a JSON object")
+        })?;
+    mcp_servers.insert(
+        "rab-browser".to_owned(),
+        serde_json::json!({
+            "command": executable.to_string_lossy(),
+            "args": ["--mcp"],
+        }),
+    );
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut contents = serde_json::to_string_pretty(&config)
+        .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+    contents.push('\n');
+    fs::write(path, contents)
+}
+
+fn register_mcp_clients(
+    home: &Path,
+    executable: &Path,
+    clients: &[String],
+) -> McpRegistrationState {
+    let mut result = McpRegistrationState {
+        registered: Vec::new(),
+        errors: Vec::new(),
+    };
+
+    for client in clients {
+        let Some(path) = mcp_client_config_path(home, client) else {
+            result.errors.push(McpRegistrationError {
+                client: client.clone(),
+                message: "unsupported MCP client".to_owned(),
+            });
+            continue;
+        };
+        match merge_mcp_client_config(&path, executable) {
+            Ok(()) => result.registered.push(client.clone()),
+            Err(error) => result.errors.push(McpRegistrationError {
+                client: client.clone(),
+                message: error.to_string(),
+            }),
+        }
+    }
+
+    result
 }
 
 fn eval_result(raw: String) -> Result<String, String> {
@@ -1640,11 +1740,9 @@ fn main() -> wry::Result<()> {
                                 // thread so the UI doesn't freeze while it completes.
                                 std::thread::spawn(move || handle.shutdown());
                             }
-                            mcp_http_state = McpHttpState {
-                                enabled: false,
-                                port,
-                                error: None,
-                            };
+                            mcp_http_state.enabled = false;
+                            mcp_http_state.port = port;
+                            mcp_http_state.error = None;
                             if enabled {
                                 match TcpListener::bind((Ipv4Addr::LOCALHOST, port)).and_then(
                                     |listener| {
@@ -1669,6 +1767,38 @@ fn main() -> wry::Result<()> {
                                     }
                                 }
                             }
+                        }
+                        ChromeCommand::RegisterMcpClients { clients } => {
+                            let registration = match (env::var("HOME"), env::current_exe()) {
+                                (Ok(home), Ok(executable)) => register_mcp_clients(
+                                    Path::new(&home),
+                                    &executable,
+                                    &clients,
+                                ),
+                                (Err(error), _) => McpRegistrationState {
+                                    registered: Vec::new(),
+                                    errors: clients
+                                        .into_iter()
+                                        .map(|client| McpRegistrationError {
+                                            client,
+                                            message: format!("HOME is unavailable: {error}"),
+                                        })
+                                        .collect(),
+                                },
+                                (_, Err(error)) => McpRegistrationState {
+                                    registered: Vec::new(),
+                                    errors: clients
+                                        .into_iter()
+                                        .map(|client| McpRegistrationError {
+                                            client,
+                                            message: format!(
+                                                "could not resolve the rab-browser executable: {error}"
+                                            ),
+                                        })
+                                        .collect(),
+                                },
+                            };
+                            mcp_http_state.registration = Some(registration);
                         }
                         ChromeCommand::SetLocale { locale } => {
                             if let Ok(locale) = locale.parse::<Locale>() {
@@ -1894,17 +2024,117 @@ fn main() -> wry::Result<()> {
 mod tests {
     use super::{
         NEW_TAB_URL, TabHistory, eval_result, internal_page_response, is_only_new_tab,
-        normalize_url, parse_startup_args, tab_suspend_deadline,
+        merge_mcp_client_config, normalize_url, parse_startup_args, register_mcp_clients,
+        tab_suspend_deadline,
     };
     use browser_core::{DEFAULT_TAB_SUSPEND_GRACE_SECS, SearchEngine, TabManager, Theme};
     use std::{
         collections::BTreeMap,
+        fs,
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
         time::{Duration, Instant},
     };
     use wry::http::{Request, StatusCode, header::CONTENT_TYPE};
 
     fn request_internal_page(url: &str, theme: Theme) -> wry::http::Response<Vec<u8>> {
         internal_page_response(Request::builder().uri(url).body(Vec::new()).unwrap(), theme)
+    }
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new() -> Self {
+            static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "rab-browser-mcp-registration-{}-{}",
+                std::process::id(),
+                NEXT_ID.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn read_json(path: &std::path::Path) -> serde_json::Value {
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn creates_a_missing_mcp_client_config() {
+        let home = TestDir::new();
+        let path = home.0.join(".cursor/mcp.json");
+        let executable = PathBuf::from("/Applications/rab-browser.app/Contents/MacOS/rab-browser");
+
+        merge_mcp_client_config(&path, &executable).unwrap();
+
+        assert_eq!(
+            read_json(&path),
+            serde_json::json!({
+                "mcpServers": {
+                    "rab-browser": {
+                        "command": executable,
+                        "args": ["--mcp"]
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn adds_mcp_servers_to_an_existing_config_without_that_key() {
+        let home = TestDir::new();
+        let path = home
+            .0
+            .join("Library/Application Support/Claude/claude_desktop_config.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"theme":"dark"}"#).unwrap();
+
+        merge_mcp_client_config(&path, std::path::Path::new("/usr/local/bin/rab-browser")).unwrap();
+
+        let config = read_json(&path);
+        assert_eq!(config["theme"], "dark");
+        assert_eq!(
+            config["mcpServers"]["rab-browser"],
+            serde_json::json!({
+                "command": "/usr/local/bin/rab-browser",
+                "args": ["--mcp"]
+            })
+        );
+    }
+
+    #[test]
+    fn preserves_existing_mcp_servers_and_registers_multiple_clients() {
+        let home = TestDir::new();
+        let cursor_path = home.0.join(".cursor/mcp.json");
+        fs::create_dir_all(cursor_path.parent().unwrap()).unwrap();
+        fs::write(
+            &cursor_path,
+            r#"{"mcpServers":{"other":{"command":"other"},"rab-browser":{"command":"old"}}}"#,
+        )
+        .unwrap();
+        let clients = ["claude_code", "cursor"].map(str::to_owned);
+
+        let result =
+            register_mcp_clients(&home.0, std::path::Path::new("/opt/rab-browser"), &clients);
+
+        assert_eq!(result.registered, clients);
+        assert!(result.errors.is_empty());
+        assert_eq!(
+            read_json(&cursor_path)["mcpServers"]["other"],
+            serde_json::json!({"command": "other"})
+        );
+        assert_eq!(
+            read_json(&cursor_path)["mcpServers"]["rab-browser"],
+            serde_json::json!({"command": "/opt/rab-browser", "args": ["--mcp"]})
+        );
+        assert!(home.0.join(".claude.json").is_file());
     }
 
     #[test]
