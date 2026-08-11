@@ -65,6 +65,7 @@ type BrowserState = {
     searchEngine: SearchEngine;
     theme: Theme;
     locale: Locale;
+    tabSuspendEnabled: boolean;
     tabSuspendGraceSecs: number;
   };
 };
@@ -99,6 +100,7 @@ const emptyState: BrowserState = {
     searchEngine: "google",
     theme: "dark",
     locale: "japanese",
+    tabSuspendEnabled: true,
     tabSuspendGraceSecs: 300,
   },
 };
@@ -1003,6 +1005,28 @@ function App() {
                       <h2>{t().performance}</h2>
                       <p>{t().performanceDescription}</p>
                     </header>
+                    <div class="settings-toggle-block">
+                      <div class="settings-toggle-heading">
+                        <div>
+                          <h3>{t().tabSuspendEnabledToggle}</h3>
+                          <p>{t().tabSuspendEnabledDescription}</p>
+                        </div>
+                        <label class="toggle-switch">
+                          <input
+                            type="checkbox"
+                            checked={state().settings.tabSuspendEnabled}
+                            aria-label={t().tabSuspendEnabledToggle}
+                            onChange={(event) =>
+                              send({
+                                type: "set_tab_suspend_enabled",
+                                enabled: event.currentTarget.checked,
+                              })
+                            }
+                          />
+                          <span aria-hidden="true" />
+                        </label>
+                      </div>
+                    </div>
                     <label class="mcp-http-port tab-suspend-grace">
                       <span>{t().tabSuspendGrace}</span>
                       <input
@@ -1010,6 +1034,7 @@ function App() {
                         min="1"
                         max="60"
                         value={tabSuspendGraceMinutes()}
+                        disabled={!state().settings.tabSuspendEnabled}
                         aria-invalid={tabSuspendGraceInvalid()}
                         onInput={(event) => {
                           setTabSuspendGraceMinutes(event.currentTarget.value);
@@ -1100,8 +1125,8 @@ function App() {
                         )}
                       </Show>
                     </div>
-                    <div class="mcp-http-block">
-                      <div class="mcp-http-heading">
+                    <div class="settings-toggle-block">
+                      <div class="settings-toggle-heading">
                         <div>
                           <h3>{t().mcpHttpToggle}</h3>
                           <p>{t().mcpHttpDescription}</p>

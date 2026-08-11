@@ -193,6 +193,9 @@ pub struct AppSettings {
     pub search_engine: SearchEngine,
     pub theme: Theme,
     pub locale: Locale,
+    /// Whether automatic suspension of backgrounded tabs is enabled. When
+    /// `false`, `tab_suspend_grace_secs` is retained but ignored.
+    pub tab_suspend_enabled: bool,
     /// How long a backgrounded tab sits idle before its WebView is
     /// suspended to save memory. User-configurable; see `MIN_TAB_SUSPEND_GRACE_SECS`
     /// and `MAX_TAB_SUSPEND_GRACE_SECS` for the accepted range.
@@ -211,6 +214,7 @@ impl Default for AppSettings {
             search_engine: SearchEngine::default(),
             theme: Theme::default(),
             locale: Locale::default(),
+            tab_suspend_enabled: true,
             tab_suspend_grace_secs: DEFAULT_TAB_SUSPEND_GRACE_SECS,
         }
     }
@@ -419,6 +423,7 @@ mod tests {
         assert_eq!(AppSettings::default().search_engine, SearchEngine::Google);
         assert_eq!(AppSettings::default().theme, Theme::Dark);
         assert_eq!(AppSettings::default().locale, Locale::Japanese);
+        assert!(AppSettings::default().tab_suspend_enabled);
     }
 
     #[test]

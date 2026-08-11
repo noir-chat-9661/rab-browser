@@ -77,6 +77,7 @@ enum ChromeCommand {
     SetMcpHttp { enabled: bool, port: u16 },
     RegisterMcpClients { clients: Vec<String> },
     SetLocale { locale: String },
+    SetTabSuspendEnabled { enabled: bool },
     SetTabSuspendGrace { secs: u64 },
     FaviconChanged { url: String },
     MediaPlaybackChanged { playing: bool },
@@ -168,6 +169,7 @@ struct ChromeSettings<'a> {
     search_engine: &'a str,
     theme: &'a str,
     locale: &'a str,
+    tab_suspend_enabled: bool,
     tab_suspend_grace_secs: u64,
 }
 
@@ -710,6 +712,23 @@ fn tab_suspend_deadline(
     last_active.get(&id).map(|last_active| *last_active + grace)
 }
 
+/// Restarts the grace period for every currently backgrounded tab by
+/// pretending they all just lost focus `now`. Called on the false->true
+/// rising edge of the tab-suspend-enabled setting so that time spent idle
+/// while the feature was off doesn't count against the grace period: without
+/// this, tabs left alone throughout a disabled period would all cross their
+/// (already elapsed) deadline in the very next sweep and get suspended in one
+/// batch the instant the feature is turned back on.
+fn restart_tab_suspend_grace(
+    backgrounded: impl Iterator<Item = TabId>,
+    last_active: &mut BTreeMap<TabId, Instant>,
+    now: Instant,
+) {
+    for id in backgrounded {
+        last_active.insert(id, now);
+    }
+}
+
 fn next_tab_suspend_deadline(
     views: &BTreeMap<TabId, WryEngine>,
     last_active: &BTreeMap<TabId, Instant>,
@@ -771,6 +790,7 @@ fn send_state(
             search_engine: settings.search_engine.as_str(),
             theme: settings.theme.as_str(),
             locale: settings.locale.as_str(),
+            tab_suspend_enabled: settings.tab_suspend_enabled,
             tab_suspend_grace_secs: settings.tab_suspend_grace_secs,
         },
     };
@@ -1868,6 +1888,16 @@ fn main() -> wry::Result<()> {
                                 current_theme.set(theme);
                             }
                         }
+                        ChromeCommand::SetTabSuspendEnabled { enabled } => {
+                            if enabled && !settings.tab_suspend_enabled {
+                                restart_tab_suspend_grace(
+                                    views.keys().copied(),
+                                    &mut last_active,
+                                    Instant::now(),
+                                );
+                            }
+                            settings.tab_suspend_enabled = enabled;
+                        }
                         ChromeCommand::SetTabSuspendGrace { secs } => {
                             // Lowering/raising this only changes future deadlines
                             // (tab_suspend_deadline reads last_active + grace fresh
@@ -1989,14 +2019,16 @@ fn main() -> wry::Result<()> {
                     );
                 }
 
-                sweep_idle_tabs(
-                    &mut views,
-                    &last_active,
-                    &playing_media,
-                    tabs.current_id(),
-                    Duration::from_secs(settings.tab_suspend_grace_secs),
-                    Instant::now(),
-                );
+                if settings.tab_suspend_enabled {
+                    sweep_idle_tabs(
+                        &mut views,
+                        &last_active,
+                        &playing_media,
+                        tabs.current_id(),
+                        Duration::from_secs(settings.tab_suspend_grace_secs),
+                        Instant::now(),
+                    );
+                }
             }
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::Resized(_) => {
@@ -2154,13 +2186,18 @@ fn main() -> wry::Result<()> {
         // is reflected in the wake-up schedule. Only applies when nothing
         // above already requested a different flow (e.g. Exit on close).
         if matches!(*control_flow, ControlFlow::Wait) {
-            *control_flow = next_tab_suspend_deadline(
-                &views,
-                &last_active,
-                &playing_media,
-                tabs.current_id(),
-                Duration::from_secs(settings.tab_suspend_grace_secs),
-            )
+            let next_deadline = if settings.tab_suspend_enabled {
+                next_tab_suspend_deadline(
+                    &views,
+                    &last_active,
+                    &playing_media,
+                    tabs.current_id(),
+                    Duration::from_secs(settings.tab_suspend_grace_secs),
+                )
+            } else {
+                None
+            };
+            *control_flow = next_deadline
             .map_or(ControlFlow::Wait, ControlFlow::WaitUntil);
         }
     });
@@ -2172,7 +2209,7 @@ mod tests {
         NEW_TAB_URL, TabHistory, eval_result, internal_page_response, is_only_new_tab,
         merge_codex_mcp_config, merge_mcp_client_config, merge_opencode_mcp_config,
         merge_zed_mcp_config, normalize_url, parse_startup_args, register_mcp_clients,
-        tab_suspend_deadline,
+        restart_tab_suspend_grace, tab_suspend_deadline,
     };
     use browser_core::{DEFAULT_TAB_SUSPEND_GRACE_SECS, SearchEngine, TabManager, Theme};
     use std::{
@@ -2684,6 +2721,20 @@ args = ["--serve"]
             tab_suspend_deadline(id, &last_active, &playing_media, None, grace),
             None
         );
+    }
+
+    #[test]
+    fn restarting_tab_suspend_grace_resets_last_active_for_backgrounded_tabs() {
+        let mut tabs = TabManager::new();
+        let stale = tabs.add_tab("https://stale.example.com");
+        let untracked = tabs.add_tab("https://untracked.example.com");
+        let mut last_active = BTreeMap::from([(stale, Instant::now() - Duration::from_secs(3600))]);
+
+        let now = Instant::now();
+        restart_tab_suspend_grace([stale, untracked].into_iter(), &mut last_active, now);
+
+        assert_eq!(last_active.get(&stale), Some(&now));
+        assert_eq!(last_active.get(&untracked), Some(&now));
     }
 
     #[test]

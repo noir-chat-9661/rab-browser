@@ -53,6 +53,9 @@ export const translations = {
     clearCookies: "Cookieを削除",
     clearCookiesDescription: "Cookieと閲覧データを削除します。",
     clearCookiesConfirm: "Cookieと閲覧データを削除しますか？この操作は取り消せません。",
+    tabSuspendEnabledToggle: "タブの自動サスペンド",
+    tabSuspendEnabledDescription:
+      "非アクティブなタブを自動でサスペンドしてメモリを節約します。",
     tabSuspendGrace: "タブのサスペンド猶予",
     tabSuspendGraceUnit: "分",
     tabSuspendGraceDescription:
@@ -172,6 +175,9 @@ export const translations = {
     clearCookies: "Clear cookies",
     clearCookiesDescription: "Clear cookies and browsing data.",
     clearCookiesConfirm: "Clear cookies and browsing data? This cannot be undone.",
+    tabSuspendEnabledToggle: "Automatic tab suspension",
+    tabSuspendEnabledDescription:
+      "Automatically suspend inactive tabs to save memory.",
     tabSuspendGrace: "Tab suspend delay",
     tabSuspendGraceUnit: "minutes",
     tabSuspendGraceDescription:

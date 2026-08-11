@@ -1122,7 +1122,7 @@ kbd {
 
 .mcp-info-block h3,
 .mcp-registration-block h3,
-.mcp-http-block h3,
+.settings-toggle-block h3,
 .mcp-tools-section h3 {
   margin: 0 0 8px;
   color: var(--text-heading);
@@ -1240,7 +1240,7 @@ kbd {
   box-shadow: 0 0 0 3px var(--accent-bg);
 }
 
-.mcp-http-block {
+.settings-toggle-block {
   margin-top: 8px;
   padding: 14px;
   background: var(--option-bg);
@@ -1248,14 +1248,14 @@ kbd {
   border-radius: 3px;
 }
 
-.mcp-http-heading {
+.settings-toggle-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
 }
 
-.mcp-http-heading p {
+.settings-toggle-heading p {
   max-width: 390px;
   margin: 0;
   color: var(--text-subtle);
