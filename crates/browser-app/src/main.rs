@@ -307,7 +307,8 @@ fn internal_page_response(request: Request<Vec<u8>>, theme: Theme) -> Response<V
                  <title>新しいタブ</title>\
                  <style>:root{{color-scheme:{color_scheme}}}html,body{{height:100%}}\
                  body{{margin:0;display:grid;place-items:center;background:{background};\
-                 color:{color};font:14px system-ui,sans-serif;user-select:none}}</style>\
+                 color:{color};font:14px system-ui,sans-serif;\
+                 -webkit-user-select:none;user-select:none}}</style>\
                  </head><body>新しいタブ</body></html>"
             )
         }
