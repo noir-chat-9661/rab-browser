@@ -679,6 +679,9 @@ fn select_content_view(
     }
 }
 
+/// Returns `true` when at least one tab was suspended, so the caller knows
+/// to push a fresh state to the chrome UI (the suspended badge otherwise
+/// wouldn't update until some unrelated command happened to broadcast state).
 fn sweep_idle_tabs(
     views: &mut BTreeMap<TabId, WryEngine>,
     last_active: &BTreeMap<TabId, Instant>,
@@ -686,11 +689,13 @@ fn sweep_idle_tabs(
     active: Option<TabId>,
     grace: Duration,
     now: Instant,
-) {
+) -> bool {
+    let before = views.len();
     views.retain(|id, _| {
         tab_suspend_deadline(*id, last_active, playing_media, active, grace)
             .is_none_or(|deadline| deadline > now)
     });
+    views.len() != before
 }
 
 /// Deliberately reads only `last_active` (when a tab last lost focus), never
@@ -2020,7 +2025,7 @@ fn main() -> wry::Result<()> {
                 }
 
                 if settings.tab_suspend_enabled {
-                    sweep_idle_tabs(
+                    let suspended_any = sweep_idle_tabs(
                         &mut views,
                         &last_active,
                         &playing_media,
@@ -2028,6 +2033,17 @@ fn main() -> wry::Result<()> {
                         Duration::from_secs(settings.tab_suspend_grace_secs),
                         Instant::now(),
                     );
+                    if suspended_any {
+                        send_state(
+                            &chrome,
+                            &tabs,
+                            &views,
+                            &bookmarks,
+                            &settings,
+                            mcp_enabled,
+                            &mcp_http_state,
+                        );
+                    }
                 }
             }
             Event::WindowEvent { event, .. } => match event {

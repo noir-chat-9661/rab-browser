@@ -623,11 +623,12 @@ function App() {
                   <span class="tab-title">{displayTitle(tab, t().newTab)}</span>
                   <span class="tab-actions">
                     <Show when={tab.suspended}>
-                      <span class="tab-suspended" title={t().tabSuspended} aria-hidden="true">
-                        <svg viewBox="0 0 16 16">
+                      <span class="tab-suspended" title={t().tabSuspended}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true">
                           <rect x="5" y="4" width="2" height="8" />
                           <rect x="9" y="4" width="2" height="8" />
                         </svg>
+                        <span class="sr-only">{t().tabSuspended}</span>
                       </span>
                     </Show>
                     <span
