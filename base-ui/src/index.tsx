@@ -17,6 +17,7 @@ type Tab = {
   faviconUrl: string | null;
   canGoBack: boolean;
   canGoForward: boolean;
+  suspended: boolean;
 };
 
 type Bookmark = {
@@ -26,6 +27,7 @@ type Bookmark = {
 
 type SearchEngine = "google" | "duckduckgo" | "bing";
 type Theme = "dark" | "light";
+type FontSize = "small" | "medium" | "large";
 type McpClient =
   | "claude_desktop"
   | "claude_code"
@@ -159,6 +161,27 @@ const themes: Theme[] = [
   "light",
 ];
 
+const fontSizes: FontSize[] = [
+  "small",
+  "medium",
+  "large",
+];
+
+const fontSizeScale: Record<FontSize, number> = {
+  small: 0.9,
+  medium: 1,
+  large: 1.15,
+};
+
+const fontSizeStorageKey = "rab-browser:font-size";
+
+function loadFontSize(): FontSize {
+  const stored = localStorage.getItem(fontSizeStorageKey);
+  return stored === "small" || stored === "medium" || stored === "large"
+    ? stored
+    : "medium";
+}
+
 const locales: Locale[] = [
   "japanese",
   "english",
@@ -185,6 +208,7 @@ function App() {
   const [locationValue, setLocationValue] = createSignal("");
   const [mcpHttpPort, setMcpHttpPort] = createSignal("8765");
   const [mcpHttpPortInvalid, setMcpHttpPortInvalid] = createSignal(false);
+  const [fontSize, setFontSize] = createSignal<FontSize>(loadFontSize());
   const [mcpRegistrationOpen, setMcpRegistrationOpen] = createSignal(false);
   const [selectedMcpClients, setSelectedMcpClients] =
     createSignal<McpClient[]>([]);
@@ -348,6 +372,14 @@ function App() {
     document.documentElement.dataset.theme = state().settings.theme;
     document.documentElement.lang =
       state().settings.locale === "japanese" ? "ja" : "en";
+  });
+
+  createEffect(() => {
+    document.documentElement.style.setProperty(
+      "--ui-font-scale",
+      String(fontSizeScale[fontSize()]),
+    );
+    localStorage.setItem(fontSizeStorageKey, fontSize());
   });
 
   createEffect(() => {
@@ -587,24 +619,34 @@ function App() {
                     </Show>
                   </span>
                   <span class="tab-title">{displayTitle(tab, t().newTab)}</span>
-                  <span
-                    class="tab-close"
-                    role="button"
-                    tabindex="0"
-                    aria-label={t().closeTab(displayTitle(tab, t().newTab))}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      send({ type: "close_tab", id: tab.id });
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
+                  <span class="tab-actions">
+                    <Show when={tab.suspended}>
+                      <span class="tab-suspended" title={t().tabSuspended} aria-hidden="true">
+                        <svg viewBox="0 0 16 16">
+                          <rect x="5" y="4" width="2" height="8" />
+                          <rect x="9" y="4" width="2" height="8" />
+                        </svg>
+                      </span>
+                    </Show>
+                    <span
+                      class="tab-close"
+                      role="button"
+                      tabindex="0"
+                      aria-label={t().closeTab(displayTitle(tab, t().newTab))}
+                      onClick={(event) => {
                         event.stopPropagation();
                         send({ type: "close_tab", id: tab.id });
-                      }
-                    }}
-                  >
-                    <Close />
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          send({ type: "close_tab", id: tab.id });
+                        }
+                      }}
+                    >
+                      <Close />
+                    </span>
                   </span>
                 </button>
               )}
@@ -883,6 +925,29 @@ function App() {
                             <span class="engine-copy">
                               <strong>{theme === "dark" ? t().dark : t().light}</strong>
                               <span>{theme === "dark" ? t().darkTheme : t().lightTheme}</span>
+                            </span>
+                          </label>
+                        )}
+                      </For>
+                    </div>
+                    <h3 class="settings-subheading">{t().fontSize}</h3>
+                    <div class="theme-options font-size-options">
+                      <For each={fontSizes}>
+                        {(size) => (
+                          <label
+                            class="theme-option"
+                            classList={{ selected: fontSize() === size }}
+                          >
+                            <input
+                              type="radio"
+                              name="font-size"
+                              value={size}
+                              checked={fontSize() === size}
+                              onChange={() => setFontSize(size)}
+                            />
+                            <span class="radio-mark" aria-hidden="true" />
+                            <span class="engine-copy">
+                              <strong>{t().fontSizes[size]}</strong>
                             </span>
                           </label>
                         )}

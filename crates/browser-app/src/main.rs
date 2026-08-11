@@ -152,6 +152,7 @@ struct ChromeTab<'a> {
     favicon_url: Option<&'a str>,
     can_go_back: bool,
     can_go_forward: bool,
+    suspended: bool,
 }
 
 #[derive(Serialize)]
@@ -735,6 +736,7 @@ fn update_history_flags(tabs: &mut TabManager, histories: &BTreeMap<TabId, TabHi
 fn send_state(
     chrome: &WebView,
     tabs: &TabManager,
+    views: &BTreeMap<TabId, WryEngine>,
     bookmarks: &BookmarkManager,
     settings: &AppSettings,
     mcp_enabled: bool,
@@ -751,6 +753,7 @@ fn send_state(
                 favicon_url: tab.favicon_url.as_deref(),
                 can_go_back: tab.can_go_back,
                 can_go_forward: tab.can_go_forward,
+                suspended: !views.contains_key(&tab.id),
             })
             .collect(),
         current_tab_id: tabs.current_id().map(TabId::get),
@@ -1261,6 +1264,7 @@ fn handle_mcp_request(
                     send_state(
                         chrome,
                         tabs,
+                        views,
                         bookmarks,
                         settings,
                         mcp_enabled,
@@ -1299,6 +1303,7 @@ fn handle_mcp_request(
             send_state(
                 chrome,
                 tabs,
+                views,
                 bookmarks,
                 settings,
                 mcp_enabled,
@@ -1325,6 +1330,7 @@ fn handle_mcp_request(
                 send_state(
                     chrome,
                     tabs,
+                    views,
                     bookmarks,
                     settings,
                     mcp_enabled,
@@ -1359,6 +1365,7 @@ fn handle_mcp_request(
                 send_state(
                     chrome,
                     tabs,
+                    views,
                     bookmarks,
                     settings,
                     mcp_enabled,
@@ -1378,6 +1385,7 @@ fn handle_mcp_request(
                     send_state(
                         chrome,
                         tabs,
+                        views,
                         bookmarks,
                         settings,
                         mcp_enabled,
@@ -1399,6 +1407,7 @@ fn handle_mcp_request(
                     send_state(
                         chrome,
                         tabs,
+                        views,
                         bookmarks,
                         settings,
                         mcp_enabled,
@@ -1613,6 +1622,7 @@ fn main() -> wry::Result<()> {
                     send_state(
                         &chrome,
                         &tabs,
+                        &views,
                         &bookmarks,
                         &settings,
                         mcp_enabled,
@@ -1665,6 +1675,7 @@ fn main() -> wry::Result<()> {
                                 send_state(
                                     &chrome,
                                     &tabs,
+                                    &views,
                                     &bookmarks,
                                     &settings,
                                     mcp_enabled,
@@ -1970,6 +1981,7 @@ fn main() -> wry::Result<()> {
                     send_state(
                         &chrome,
                         &tabs,
+                        &views,
                         &bookmarks,
                         &settings,
                         mcp_enabled,
@@ -2026,6 +2038,7 @@ fn main() -> wry::Result<()> {
                             send_state(
                                 &chrome,
                                 &tabs,
+                                &views,
                                 &bookmarks,
                                 &settings,
                                 mcp_enabled,
@@ -2109,6 +2122,7 @@ fn main() -> wry::Result<()> {
                                 send_state(
                                     &chrome,
                                     &tabs,
+                                    &views,
                                     &bookmarks,
                                     &settings,
                                     mcp_enabled,
