@@ -711,7 +711,9 @@ fn select_content_view(
 /// Returns `true` when at least one tab was suspended, so the caller knows
 /// to push a fresh state to the chrome UI (the suspended badge otherwise
 /// wouldn't update until some unrelated command happened to broadcast state).
+#[allow(clippy::too_many_arguments)]
 fn sweep_idle_tabs(
+    tabs: &TabManager,
     views: &mut BTreeMap<TabId, WryEngine>,
     last_active: &BTreeMap<TabId, Instant>,
     playing_media: &BTreeMap<TabId, bool>,
@@ -721,7 +723,7 @@ fn sweep_idle_tabs(
 ) -> bool {
     let before = views.len();
     views.retain(|id, _| {
-        tab_suspend_deadline(*id, last_active, playing_media, active, grace)
+        tab_suspend_deadline(tabs, *id, last_active, playing_media, active, grace)
             .is_none_or(|deadline| deadline > now)
     });
     views.len() != before
@@ -733,7 +735,13 @@ fn sweep_idle_tabs(
 /// (`ensure_content_view`), never resurrected by a later grace-period
 /// increase in settings. This function only ever *schedules* removals, so
 /// there is nothing here that could undo one.
+///
+/// A backgrounded tab that's still sitting on the blank new-tab placeholder
+/// (never navigated) uses zero grace instead of the configured one: there's
+/// no state to lose, and recreating its view later is instant, so there's no
+/// reason to keep it alive just because the grace timer hasn't elapsed yet.
 fn tab_suspend_deadline(
+    tabs: &TabManager,
     id: TabId,
     last_active: &BTreeMap<TabId, Instant>,
     playing_media: &BTreeMap<TabId, bool>,
@@ -743,6 +751,11 @@ fn tab_suspend_deadline(
     if active == Some(id) || playing_media.get(&id).copied().unwrap_or(false) {
         return None;
     }
+    let grace = if tabs.tab(id).is_some_and(|tab| is_new_tab_url(&tab.url)) {
+        Duration::ZERO
+    } else {
+        grace
+    };
     last_active.get(&id).map(|last_active| *last_active + grace)
 }
 
@@ -764,6 +777,7 @@ fn restart_tab_suspend_grace(
 }
 
 fn next_tab_suspend_deadline(
+    tabs: &TabManager,
     views: &BTreeMap<TabId, WryEngine>,
     last_active: &BTreeMap<TabId, Instant>,
     playing_media: &BTreeMap<TabId, bool>,
@@ -772,7 +786,7 @@ fn next_tab_suspend_deadline(
 ) -> Option<Instant> {
     views
         .keys()
-        .filter_map(|id| tab_suspend_deadline(*id, last_active, playing_media, active, grace))
+        .filter_map(|id| tab_suspend_deadline(tabs, *id, last_active, playing_media, active, grace))
         .min()
 }
 
@@ -2096,6 +2110,7 @@ fn main() -> wry::Result<()> {
 
                 if settings.tab_suspend_enabled {
                     let suspended_any = sweep_idle_tabs(
+                        &tabs,
                         &mut views,
                         &last_active,
                         &playing_media,
@@ -2277,6 +2292,7 @@ fn main() -> wry::Result<()> {
         if matches!(*control_flow, ControlFlow::Wait) {
             let next_deadline = if settings.tab_suspend_enabled {
                 next_tab_suspend_deadline(
+                    &tabs,
                     &views,
                     &last_active,
                     &playing_media,
@@ -2797,18 +2813,36 @@ args = ["--serve"]
 
         let grace = Duration::from_secs(DEFAULT_TAB_SUSPEND_GRACE_SECS);
         assert_eq!(
-            tab_suspend_deadline(id, &last_active, &playing_media, None, grace),
+            tab_suspend_deadline(&tabs, id, &last_active, &playing_media, None, grace),
             Some(last_used + grace)
         );
         assert_eq!(
-            tab_suspend_deadline(id, &last_active, &playing_media, Some(id), grace),
+            tab_suspend_deadline(&tabs, id, &last_active, &playing_media, Some(id), grace),
             None
         );
 
         playing_media.insert(id, true);
         assert_eq!(
-            tab_suspend_deadline(id, &last_active, &playing_media, None, grace),
+            tab_suspend_deadline(&tabs, id, &last_active, &playing_media, None, grace),
             None
+        );
+    }
+
+    #[test]
+    fn suspends_a_backgrounded_blank_new_tab_immediately() {
+        let mut tabs = TabManager::new();
+        let id = tabs.add_tab(NEW_TAB_URL);
+        let last_used = Instant::now();
+        let last_active = BTreeMap::from([(id, last_used)]);
+        let playing_media = BTreeMap::new();
+        let grace = Duration::from_secs(DEFAULT_TAB_SUSPEND_GRACE_SECS);
+
+        // A tab still sitting on the new-tab placeholder has nothing to
+        // lose, so it's due for suspension right away instead of waiting
+        // out the full grace period like a real page would.
+        assert_eq!(
+            tab_suspend_deadline(&tabs, id, &last_active, &playing_media, None, grace),
+            Some(last_used)
         );
     }
 
