@@ -178,10 +178,18 @@ const fontSizeScale: Record<FontSize, number> = {
 const fontSizeStorageKey = "rab-browser:font-size";
 
 function loadFontSize(): FontSize {
-  const stored = localStorage.getItem(fontSizeStorageKey);
-  return stored === "small" || stored === "medium" || stored === "large"
-    ? stored
-    : "medium";
+  // rab-browser's chrome UI loads via WKWebView loadHTMLString with no base
+  // URL, which gives the page an opaque origin — localStorage access throws
+  // synchronously there instead of just being unavailable, so this must be
+  // guarded or it takes down the entire chrome render before anything mounts.
+  try {
+    const stored = localStorage.getItem(fontSizeStorageKey);
+    return stored === "small" || stored === "medium" || stored === "large"
+      ? stored
+      : "medium";
+  } catch {
+    return "medium";
+  }
 }
 
 const locales: Locale[] = [
@@ -381,7 +389,12 @@ function App() {
       "--ui-font-scale",
       String(fontSizeScale[fontSize()]),
     );
-    localStorage.setItem(fontSizeStorageKey, fontSize());
+    try {
+      localStorage.setItem(fontSizeStorageKey, fontSize());
+    } catch {
+      // Opaque-origin WKWebView page (see loadFontSize) — the setting still
+      // works for this session via the signal, it just won't persist.
+    }
   });
 
   createEffect(() => {
