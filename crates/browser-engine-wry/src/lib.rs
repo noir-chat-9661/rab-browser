@@ -128,11 +128,13 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
 
   document.addEventListener("DOMContentLoaded", notifyFaviconChanged);
   window.addEventListener("load", notifyFaviconChanged);
-  // This script runs at document-start, before <head> necessarily exists, so
-  // the observer can't just be attached once here (document.head may still
-  // be null). Attach to <head> as soon as it's available: immediately if
-  // it's already there, otherwise via a one-shot observer on <html> that
-  // watches for <head> to be inserted and then re-targets itself.
+  // This script runs at document-start, before <head> (or even <html>)
+  // necessarily exists, so the observer can't just be attached once here
+  // (document.head, and even document.documentElement, may still be null).
+  // Attach to <head> as soon as it's available: immediately if it's already
+  // there, otherwise via a one-shot observer on the always-present
+  // `document` that watches for <head> to be inserted and then re-targets
+  // itself to just <head>.
   const observeHeadFavicon = (head) => {
     new MutationObserver(notifyFaviconChanged).observe(head, {
       childList: true,
@@ -149,7 +151,7 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
       rootObserver.disconnect();
       observeHeadFavicon(document.head);
     });
-    rootObserver.observe(document.documentElement, { childList: true });
+    rootObserver.observe(document, { childList: true, subtree: true });
   }
 
   let lastMediaPlaying;

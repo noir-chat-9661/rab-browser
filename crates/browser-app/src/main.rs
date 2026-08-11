@@ -650,6 +650,13 @@ fn select_content_view(
         return;
     }
     if previous == Some(id) {
+        // Still re-focus the content view: clicking the already-active tab
+        // is a common way to move focus out of the location bar/palette and
+        // back into the page, so that has to keep working even though
+        // nothing else about the selection actually changes.
+        if let Some(view) = views.get(&id) {
+            let _ = view.focus();
+        }
         return;
     }
 
