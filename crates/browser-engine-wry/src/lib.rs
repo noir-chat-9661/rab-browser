@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use browser_core::{BrowserEngine, BrowserError};
+use browser_core::{BrowserEngine, BrowserError, Theme};
 use tao::window::Window;
 use wry::{
     PageLoadEvent, Rect, WebView, WebViewBuilder,
@@ -12,7 +12,10 @@ use wry::{
 #[cfg(target_os = "macos")]
 use objc2::{MainThreadMarker, rc::Retained};
 #[cfg(target_os = "macos")]
-use objc2_app_kit::{NSAutoresizingMaskOptions, NSView};
+use objc2_app_kit::{
+    NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
+    NSAutoresizingMaskOptions, NSView,
+};
 #[cfg(target_os = "macos")]
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 #[cfg(target_os = "macos")]
@@ -196,13 +199,14 @@ type InstallJsDialogDelegateResult = ();
 type CustomProtocolHandler = Box<dyn Fn(Request<Vec<u8>>) -> Response<Vec<u8>>>;
 
 impl WryEngine {
-    pub fn new(window: &Window, url: &str) -> Result<Self, wry::Error> {
-        Self::new_with_handlers(window, url, |_| {}, |_, _| {}, |_| {})
+    pub fn new(window: &Window, url: &str, theme: Theme) -> Result<Self, wry::Error> {
+        Self::new_with_handlers(window, url, theme, |_| {}, |_, _| {}, |_| {})
     }
 
     pub fn new_with_handlers(
         window: &Window,
         url: &str,
+        theme: Theme,
         on_title_changed: impl Fn(String) + 'static,
         on_page_load: impl Fn(PageLoadEvent, String) + 'static,
         on_ipc: impl Fn(Request<String>) + 'static,
@@ -211,6 +215,7 @@ impl WryEngine {
             window,
             url,
             None,
+            theme,
             on_title_changed,
             on_page_load,
             on_ipc,
@@ -221,6 +226,7 @@ impl WryEngine {
         window: &Window,
         url: &str,
         bounds: Option<Rect>,
+        theme: Theme,
         on_title_changed: impl Fn(String) + 'static,
         on_page_load: impl Fn(PageLoadEvent, String) + 'static,
         on_ipc: impl Fn(Request<String>) + 'static,
@@ -229,6 +235,7 @@ impl WryEngine {
             window,
             url,
             bounds,
+            theme,
             on_title_changed,
             on_page_load,
             on_ipc,
@@ -241,6 +248,7 @@ impl WryEngine {
         window: &Window,
         url: &str,
         bounds: Option<Rect>,
+        theme: Theme,
         on_title_changed: impl Fn(String) + 'static,
         on_page_load: impl Fn(PageLoadEvent, String) + 'static,
         on_ipc: impl Fn(Request<String>) + 'static,
@@ -251,6 +259,7 @@ impl WryEngine {
             window,
             url,
             bounds,
+            theme,
             on_title_changed,
             on_page_load,
             on_ipc,
@@ -263,6 +272,7 @@ impl WryEngine {
         window: &Window,
         url: &str,
         bounds: Option<Rect>,
+        theme: Theme,
         on_title_changed: impl Fn(String) + 'static,
         on_page_load: impl Fn(PageLoadEvent, String) + 'static,
         on_ipc: impl Fn(Request<String>) + 'static,
@@ -289,12 +299,24 @@ impl WryEngine {
         #[cfg(target_os = "macos")]
         let container = attach_to_offset_container(window, &webview, bounds);
         let ui_delegate = install_js_dialog_delegate(&webview);
-        Ok(Self {
+        let engine = Self {
             webview,
             _ui_delegate: ui_delegate,
             #[cfg(target_os = "macos")]
             container,
-        })
+        };
+        engine.apply_theme(theme);
+        Ok(engine)
+    }
+
+    /// Applies the browser's theme to the native view hosting the web content.
+    /// On macOS this changes the `prefers-color-scheme` value observed by the
+    /// page without changing the application-wide appearance.
+    pub fn apply_theme(&self, theme: Theme) {
+        #[cfg(target_os = "macos")]
+        apply_theme_to_view(&self.container, theme);
+        #[cfg(not(target_os = "macos"))]
+        let _ = theme;
     }
 
     /// Repositions the content WebView. On macOS this moves the offset
@@ -348,6 +370,27 @@ impl WryEngine {
     pub fn webview(&self) -> &WebView {
         &self.webview
     }
+}
+
+#[cfg(target_os = "macos")]
+fn apply_theme_to_view(view: &NSView, theme: Theme) {
+    // SAFETY: AppKit exports both standard appearance names on every supported
+    // macOS version, and objc2 exposes those immutable framework symbols here.
+    let appearance = unsafe {
+        let appearance_name = match theme {
+            Theme::Dark => NSAppearanceNameDarkAqua,
+            Theme::Light => NSAppearanceNameAqua,
+        };
+        NSAppearance::appearanceNamed(appearance_name)
+    };
+    // These are standard AppKit constants and should always resolve, but this
+    // only ever affects a page's prefers-color-scheme match, so silently
+    // leaving the appearance unset on an unexpected None beats crashing the
+    // whole app over a cosmetic detail.
+    let Some(appearance) = appearance else {
+        return;
+    };
+    view.setAppearance(Some(&appearance));
 }
 
 #[cfg(target_os = "macos")]
