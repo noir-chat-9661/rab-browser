@@ -307,7 +307,7 @@ fn internal_page_response(request: Request<Vec<u8>>, theme: Theme) -> Response<V
                  <title>新しいタブ</title>\
                  <style>:root{{color-scheme:{color_scheme}}}html,body{{height:100%}}\
                  body{{margin:0;display:grid;place-items:center;background:{background};\
-                 color:{color};font:14px system-ui,sans-serif}}</style>\
+                 color:{color};font:14px system-ui,sans-serif;user-select:none}}</style>\
                  </head><body>新しいタブ</body></html>"
             )
         }
@@ -544,6 +544,7 @@ fn create_content_view(
         window,
         url,
         Some(bounds),
+        theme.get(),
         move |title| {
             let _ = title_tx.send(ContentEvent::TitleChanged { id, title });
         },
@@ -1948,6 +1949,17 @@ fn main() -> wry::Result<()> {
                             if let Ok(theme) = theme.parse::<Theme>() {
                                 settings.theme = theme;
                                 current_theme.set(theme);
+                                for (id, view) in views.iter_mut() {
+                                    view.apply_theme(theme);
+                                    // The newtab page's colors are baked into
+                                    // static HTML generated at navigation
+                                    // time (see internal_page_response), so
+                                    // an already-open one needs a reload to
+                                    // pick up the new theme.
+                                    if tabs.tab(*id).is_some_and(|tab| is_new_tab_url(&tab.url)) {
+                                        let _ = view.reload();
+                                    }
+                                }
                                 state_changed = true;
                             }
                         }
