@@ -633,6 +633,13 @@ fn ensure_content_view(
     true
 }
 
+/// `previous` is the tab that was visible before this call and must be
+/// passed in explicitly by the caller rather than read from
+/// `tabs.current_id()` here: `add_tab`/`close_tab` both mutate
+/// `TabManager`'s current-tab pointer *before* calling this function (via
+/// `TabManager::add_tab`/`remove_tab`, which auto-advance `current`), so by
+/// the time this runs, `tabs.current_id()` may already equal `id` even
+/// though the view that's actually still on screen is a different one.
 #[allow(clippy::too_many_arguments)]
 fn select_content_view(
     window: &Window,
@@ -643,9 +650,9 @@ fn select_content_view(
     theme: &Rc<Cell<Theme>>,
     sidebar_visible: bool,
     last_active: &mut BTreeMap<TabId, Instant>,
+    previous: Option<TabId>,
     id: TabId,
 ) {
-    let previous = tabs.current_id();
     if tabs.tab(id).is_none() {
         return;
     }
@@ -679,7 +686,14 @@ fn select_content_view(
     if !tabs.select_tab(id) {
         return;
     }
-    if let Some(previous) = previous {
+    // Only bookkeep last_active for a `previous` that's still a real tab:
+    // close_tab passes the just-closed tab's id here (see its call site),
+    // and that id no longer exists in `tabs`/`views` by this point, so
+    // recording it would leave a permanent stale entry that's never cleaned
+    // up (close_tab only clears last_active for the tab it's closing, once).
+    if let Some(previous) = previous
+        && tabs.tab(previous).is_some()
+    {
         last_active.insert(previous, Instant::now());
     }
 
@@ -844,9 +858,6 @@ fn add_tab(
         theme,
     ) {
         Ok(view) => {
-            if let Some(previous) = previous {
-                last_active.insert(previous, Instant::now());
-            }
             histories.insert(id, TabHistory::new(url));
             views.insert(id, view);
             select_content_view(
@@ -858,6 +869,7 @@ fn add_tab(
                 theme,
                 sidebar_visible,
                 last_active,
+                previous,
                 id,
             );
             Ok(id)
@@ -888,6 +900,11 @@ fn close_tab(
         return CloseTabResult::Ignored;
     }
 
+    // Captured before remove_tab: TabManager::remove_tab auto-advances
+    // `current` to another tab when the closed tab was the active one, so
+    // tabs.current_id() read afterward can no longer tell select_content_view
+    // which view was actually on screen a moment ago.
+    let previous = tabs.current_id();
     views.remove(&id);
     histories.remove(&id);
     last_active.remove(&id);
@@ -924,6 +941,7 @@ fn close_tab(
             theme,
             sidebar_visible,
             last_active,
+            previous,
             current,
         );
     }
@@ -1350,6 +1368,7 @@ fn handle_mcp_request(
             let _ = reply.send(result != CloseTabResult::Ignored);
         }
         McpRequest::SelectTab { id, reply } => {
+            let previous = tabs.current_id();
             let selected = resolve_tab_id(tabs, id).is_some_and(|id| {
                 select_content_view(
                     window,
@@ -1360,6 +1379,7 @@ fn handle_mcp_request(
                     theme,
                     sidebar_visible,
                     last_active,
+                    previous,
                     id,
                 );
                 true
@@ -1693,6 +1713,7 @@ fn main() -> wry::Result<()> {
                             state_changed = true;
                         }
                         ChromeCommand::SelectTab { id } => {
+                            let previous = tabs.current_id();
                             if let Some(id) = resolve_tab_id(&tabs, id) {
                                 select_content_view(
                                     &window,
@@ -1703,6 +1724,7 @@ fn main() -> wry::Result<()> {
                                     &current_theme,
                                     sidebar_visible,
                                     &mut last_active,
+                                    previous,
                                     id,
                                 );
                                 state_changed = true;
