@@ -14,6 +14,7 @@ export const translations = {
     newTab: "新しいタブ",
     readyToBrowse: "閲覧を開始できます",
     closeTab: (title: string) => `${title}を閉じる`,
+    tabSuspended: "メモリ節約のためサスペンド中(再度開くと再読み込みします)",
     bookmarks: "お気に入り",
     emptyBookmarks: "ページをお気に入りに追加すると、ここに表示されます。",
     removeBookmark: (title: string) => `${title}をお気に入りから削除`,
@@ -34,6 +35,8 @@ export const translations = {
     darkTheme: "暗い配色",
     light: "ライト",
     lightTheme: "明るい配色",
+    fontSize: "文字サイズ",
+    fontSizes: { small: "小", medium: "標準", large: "大" },
     language: "言語",
     languageDescription: "ブラウザに表示する言語を選びます。",
     japanese: "日本語",
@@ -50,6 +53,9 @@ export const translations = {
     clearCookies: "Cookieを削除",
     clearCookiesDescription: "Cookieと閲覧データを削除します。",
     clearCookiesConfirm: "Cookieと閲覧データを削除しますか？この操作は取り消せません。",
+    tabSuspendEnabledToggle: "タブの自動サスペンド",
+    tabSuspendEnabledDescription:
+      "非アクティブなタブを自動でサスペンドしてメモリを節約します。",
     tabSuspendGrace: "タブのサスペンド猶予",
     tabSuspendGraceUnit: "分",
     tabSuspendGraceDescription:
@@ -130,6 +136,7 @@ export const translations = {
     newTab: "New tab",
     readyToBrowse: "Ready to browse",
     closeTab: (title: string) => `Close ${title}`,
+    tabSuspended: "Suspended to save memory (reloads when reopened)",
     bookmarks: "Bookmarks",
     emptyBookmarks: "Star a page to keep it here.",
     removeBookmark: (title: string) => `Remove bookmark ${title}`,
@@ -150,6 +157,8 @@ export const translations = {
     darkTheme: "Dark theme",
     light: "Light",
     lightTheme: "Light theme",
+    fontSize: "Font size",
+    fontSizes: { small: "Small", medium: "Medium", large: "Large" },
     language: "Language",
     languageDescription: "Choose the language used by the browser.",
     japanese: "日本語",
@@ -166,6 +175,9 @@ export const translations = {
     clearCookies: "Clear cookies",
     clearCookiesDescription: "Clear cookies and browsing data.",
     clearCookiesConfirm: "Clear cookies and browsing data? This cannot be undone.",
+    tabSuspendEnabledToggle: "Automatic tab suspension",
+    tabSuspendEnabledDescription:
+      "Automatically suspend inactive tabs to save memory.",
     tabSuspendGrace: "Tab suspend delay",
     tabSuspendGraceUnit: "minutes",
     tabSuspendGraceDescription:
