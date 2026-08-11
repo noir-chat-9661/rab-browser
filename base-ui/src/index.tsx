@@ -1,12 +1,14 @@
 import {
   For,
   Show,
+  batch,
   createEffect,
   createMemo,
   createSignal,
   onMount,
 } from "solid-js";
 import { render } from "solid-js/web";
+import { createStore, reconcile } from "solid-js/store";
 import { type Locale, translations } from "./i18n";
 import "./styles.css";
 
@@ -210,7 +212,7 @@ const mcpClients: McpClient[] = [
 ];
 
 function App() {
-  const [state, setState] = createSignal(emptyState);
+  const [state, setState] = createStore(emptyState);
   const [locationOpen, setLocationOpen] = createSignal(false);
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [settingsCategory, setSettingsCategory] =
@@ -237,7 +239,7 @@ function App() {
   let mcpRegistrationDialog: HTMLElement | undefined;
   let mcpRegistrationFirstCheckbox: HTMLInputElement | undefined;
   let mcpRegistrationPreviouslyFocused: HTMLElement | null = null;
-  const t = createMemo(() => translations[state().settings.locale]);
+  const t = createMemo(() => translations[state.settings.locale]);
 
   // wry's WKUIDelegate does not implement the JS confirm/alert panels, so
   // window.confirm() silently no-ops on macOS. Use an in-app modal instead.
@@ -324,17 +326,17 @@ function App() {
   };
 
   const currentTab = createMemo(() =>
-    state().tabs.find((tab) => tab.id === state().currentTabId),
+    state.tabs.find((tab) => tab.id === state.currentTabId),
   );
   const currentTabBookmarked = createMemo(() => {
     const url = currentTab()?.url;
-    return Boolean(url && state().bookmarks.some((bookmark) => bookmark.url === url));
+    return Boolean(url && state.bookmarks.some((bookmark) => bookmark.url === url));
   });
   const searchMode = createMemo(() => locationValue().startsWith("?"));
   const searchEngineLabel = createMemo(
     () =>
       searchEngines.find(
-        (engine) => engine.value === state().settings.searchEngine,
+        (engine) => engine.value === state.settings.searchEngine,
       )?.label ?? "Google",
   );
   const displayedLocationValue = createMemo(() =>
@@ -357,7 +359,7 @@ function App() {
       // holds a draft/invalid value — otherwise a running server could be
       // stranded with no way to turn it off from the UI.
       setMcpHttpPortInvalid(false);
-      send({ type: "set_mcp_http", enabled: false, port: state().mcpHttp.port });
+      send({ type: "set_mcp_http", enabled: false, port: state.mcpHttp.port });
       return;
     }
     const port = validMcpHttpPort();
@@ -379,9 +381,9 @@ function App() {
   };
 
   createEffect(() => {
-    document.documentElement.dataset.theme = state().settings.theme;
+    document.documentElement.dataset.theme = state.settings.theme;
     document.documentElement.lang =
-      state().settings.locale === "japanese" ? "ja" : "en";
+      state.settings.locale === "japanese" ? "ja" : "en";
   });
 
   createEffect(() => {
@@ -398,11 +400,11 @@ function App() {
   });
 
   createEffect(() => {
-    setMcpHttpPort(String(state().mcpHttp.port));
+    setMcpHttpPort(String(state.mcpHttp.port));
   });
 
   createEffect(() => {
-    const secs = state().settings.tabSuspendGraceSecs;
+    const secs = state.settings.tabSuspendGraceSecs;
     // Skip resync while the draft is mid-edit and invalid, so an unrelated
     // state broadcast (e.g. a tab title update) doesn't wipe out what the
     // user is currently typing before they've entered a valid value.
@@ -460,9 +462,21 @@ function App() {
     closeLocation();
   };
 
+  const receiveState = (newState: BrowserState) => {
+    batch(() => {
+      setState("tabs", reconcile(newState.tabs, { key: "id" }));
+      setState("bookmarks", reconcile(newState.bookmarks, { key: "url" }));
+      setState("currentTabId", newState.currentTabId);
+      setState("mcpEnabled", newState.mcpEnabled);
+      setState("mcpHttp", reconcile(newState.mcpHttp));
+      setState("mcpRegistration", newState.mcpRegistration);
+      setState("settings", reconcile(newState.settings));
+    });
+  };
+
   onMount(() => {
     window.rabChrome = {
-      receive: setState,
+      receive: receiveState,
       openLocation,
       openSettings,
       openMcpHelp,
@@ -599,7 +613,7 @@ function App() {
         <section class="tabs-section" aria-label={t().openTabs}>
           <div class="section-label">
             <span>{t().tabs}</span>
-            <span>{state().tabs.length.toString().padStart(2, "0")}</span>
+            <span>{state.tabs.length.toString().padStart(2, "0")}</span>
           </div>
           <button
             class="new-tab"
@@ -611,11 +625,11 @@ function App() {
             <kbd>{shortcutLabel("T")}</kbd>
           </button>
           <div class="tab-list">
-            <For each={state().tabs}>
+            <For each={state.tabs}>
               {(tab) => (
                 <button
                   class="tab"
-                  classList={{ active: tab.id === state().currentTabId }}
+                  classList={{ active: tab.id === state.currentTabId }}
                   type="button"
                   title={isNewTabUrl(tab.url) ? t().readyToBrowse : tab.url}
                   onClick={() => send({ type: "select_tab", id: tab.id })}
@@ -673,14 +687,14 @@ function App() {
         <section class="bookmarks-section" aria-label={t().bookmarks}>
           <div class="section-label">
             <span>{t().bookmarks}</span>
-            <span>{state().bookmarks.length.toString().padStart(2, "0")}</span>
+            <span>{state.bookmarks.length.toString().padStart(2, "0")}</span>
           </div>
           <Show
-            when={state().bookmarks.length > 0}
+            when={state.bookmarks.length > 0}
             fallback={<p class="bookmarks-empty">{t().emptyBookmarks}</p>}
           >
             <div class="bookmark-list">
-              <For each={state().bookmarks}>
+              <For each={state.bookmarks}>
                 {(bookmark) => (
                   <button
                     class="bookmark"
@@ -858,13 +872,13 @@ function App() {
                         {(locale) => (
                           <label
                             class="theme-option"
-                            classList={{ selected: state().settings.locale === locale }}
+                            classList={{ selected: state.settings.locale === locale }}
                           >
                             <input
                               type="radio"
                               name="locale"
                               value={locale}
-                              checked={state().settings.locale === locale}
+                              checked={state.settings.locale === locale}
                               onChange={() => send({ type: "set_locale", locale })}
                             />
                             <span class="radio-mark" aria-hidden="true" />
@@ -894,13 +908,13 @@ function App() {
                         {(engine) => (
                           <label
                             class="search-engine-option"
-                            classList={{ selected: state().settings.searchEngine === engine.value }}
+                            classList={{ selected: state.settings.searchEngine === engine.value }}
                           >
                             <input
                               type="radio"
                               name="search-engine"
                               value={engine.value}
-                              checked={state().settings.searchEngine === engine.value}
+                              checked={state.settings.searchEngine === engine.value}
                               onChange={() =>
                                 send({ type: "set_search_engine", engine: engine.value })
                               }
@@ -928,13 +942,13 @@ function App() {
                         {(theme) => (
                           <label
                             class="theme-option"
-                            classList={{ selected: state().settings.theme === theme }}
+                            classList={{ selected: state.settings.theme === theme }}
                           >
                             <input
                               type="radio"
                               name="theme"
                               value={theme}
-                              checked={state().settings.theme === theme}
+                              checked={state.settings.theme === theme}
                               onChange={() => send({ type: "set_theme", theme })}
                             />
                             <span class="radio-mark" aria-hidden="true" />
@@ -1028,7 +1042,7 @@ function App() {
                         <label class="toggle-switch">
                           <input
                             type="checkbox"
-                            checked={state().settings.tabSuspendEnabled}
+                            checked={state.settings.tabSuspendEnabled}
                             aria-label={t().tabSuspendEnabledToggle}
                             onChange={(event) =>
                               send({
@@ -1048,7 +1062,7 @@ function App() {
                         min="1"
                         max="60"
                         value={tabSuspendGraceMinutes()}
-                        disabled={!state().settings.tabSuspendEnabled}
+                        disabled={!state.settings.tabSuspendEnabled}
                         aria-invalid={tabSuspendGraceInvalid()}
                         onInput={(event) => {
                           setTabSuspendGraceMinutes(event.currentTarget.value);
@@ -1086,15 +1100,15 @@ function App() {
                         <h3>{t().mcpStatus}</h3>
                         <div
                           class="mcp-status"
-                          classList={{ enabled: state().mcpEnabled }}
+                          classList={{ enabled: state.mcpEnabled }}
                         >
                           <span class="mcp-status-dot" aria-hidden="true" />
                           <strong>
-                            {state().mcpEnabled ? t().mcpEnabled : t().mcpDisabled}
+                            {state.mcpEnabled ? t().mcpEnabled : t().mcpDisabled}
                           </strong>
                         </div>
                         <p>
-                          {state().mcpEnabled
+                          {state.mcpEnabled
                             ? t().mcpEnabledDescription
                             : t().mcpDisabledDescription}
                         </p>
@@ -1108,7 +1122,7 @@ function App() {
                       <button type="button" onClick={openMcpRegistration}>
                         {t().mcpRegisterButton}
                       </button>
-                      <Show when={state().mcpRegistration}>
+                      <Show when={state.mcpRegistration}>
                         {(registration) => (
                           <div class="mcp-registration-feedback">
                             <Show when={registration().registered.length > 0}>
@@ -1148,7 +1162,7 @@ function App() {
                         <label class="toggle-switch">
                           <input
                             type="checkbox"
-                            checked={state().mcpHttp.enabled}
+                            checked={state.mcpHttp.enabled}
                             aria-label={t().mcpHttpToggle}
                             onChange={(event) =>
                               updateMcpHttp(event.currentTarget.checked)
@@ -1167,7 +1181,7 @@ function App() {
                           aria-invalid={mcpHttpPortInvalid()}
                           onInput={(event) => {
                             setMcpHttpPort(event.currentTarget.value);
-                            if (state().mcpHttp.enabled) {
+                            if (state.mcpHttp.enabled) {
                               updateMcpHttp(true);
                             } else {
                               setMcpHttpPortInvalid(validMcpHttpPort() === null);
@@ -1189,7 +1203,7 @@ function App() {
                           {`claude mcp add --transport http rab-browser ${mcpHttpEndpoint()}`}
                         </code>
                       </div>
-                      <Show when={state().mcpHttp.error}>
+                      <Show when={state.mcpHttp.error}>
                         {(error) => (
                           <p class="mcp-http-error" role="alert">
                             <strong>{t().mcpHttpError}:</strong> {error()}
