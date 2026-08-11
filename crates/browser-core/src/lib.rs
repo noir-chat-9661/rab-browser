@@ -1,6 +1,6 @@
 //! GUI-independent browser state and engine operations.
 
-use std::{collections::BTreeMap, error::Error, fmt};
+use std::{collections::BTreeMap, collections::VecDeque, error::Error, fmt};
 
 /// Stable identifier assigned to a tab by [`TabManager`].
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
@@ -230,7 +230,7 @@ pub struct HistoryEntry {
 /// Owns the bounded in-memory browsing history.
 #[derive(Debug)]
 pub struct HistoryManager {
-    entries: Vec<HistoryEntry>,
+    entries: VecDeque<HistoryEntry>,
     capacity: usize,
 }
 
@@ -247,7 +247,7 @@ impl HistoryManager {
 
     fn with_capacity(capacity: usize) -> Self {
         Self {
-            entries: Vec::new(),
+            entries: VecDeque::new(),
             capacity,
         }
     }
@@ -255,16 +255,16 @@ impl HistoryManager {
     /// Records a navigation unless it repeats the most recent URL.
     pub fn record(&mut self, url: impl Into<String>, title: impl Into<String>) {
         let url = url.into();
-        if self.entries.last().is_some_and(|entry| entry.url == url) {
+        if self.entries.back().is_some_and(|entry| entry.url == url) {
             return;
         }
 
-        self.entries.push(HistoryEntry {
+        self.entries.push_back(HistoryEntry {
             url,
             title: title.into(),
         });
         if self.entries.len() > self.capacity {
-            self.entries.remove(0);
+            self.entries.pop_front();
         }
     }
 

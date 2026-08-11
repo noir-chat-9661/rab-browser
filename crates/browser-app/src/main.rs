@@ -608,6 +608,7 @@ fn ensure_content_view(
     commands_tx: &Sender<String>,
     theme: &Rc<Cell<Theme>>,
     sidebar_visible: bool,
+    last_active: &mut BTreeMap<TabId, Instant>,
     id: TabId,
 ) -> bool {
     if views.contains_key(&id) {
@@ -628,9 +629,17 @@ fn ensure_content_view(
         return false;
     };
     views.insert(id, view);
+    last_active.insert(id, Instant::now());
     true
 }
 
+/// `previous` is the tab that was visible before this call and must be
+/// passed in explicitly by the caller rather than read from
+/// `tabs.current_id()` here: `add_tab`/`close_tab` both mutate
+/// `TabManager`'s current-tab pointer *before* calling this function (via
+/// `TabManager::add_tab`/`remove_tab`, which auto-advance `current`), so by
+/// the time this runs, `tabs.current_id()` may already equal `id` even
+/// though the view that's actually still on screen is a different one.
 #[allow(clippy::too_many_arguments)]
 fn select_content_view(
     window: &Window,
@@ -641,10 +650,20 @@ fn select_content_view(
     theme: &Rc<Cell<Theme>>,
     sidebar_visible: bool,
     last_active: &mut BTreeMap<TabId, Instant>,
+    previous: Option<TabId>,
     id: TabId,
 ) {
-    let previous = tabs.current_id();
     if tabs.tab(id).is_none() {
+        return;
+    }
+    if previous == Some(id) {
+        // Still re-focus the content view: clicking the already-active tab
+        // is a common way to move focus out of the location bar/palette and
+        // back into the page, so that has to keep working even though
+        // nothing else about the selection actually changes.
+        if let Some(view) = views.get(&id) {
+            let _ = view.focus();
+        }
         return;
     }
 
@@ -658,6 +677,7 @@ fn select_content_view(
         commands_tx,
         theme,
         sidebar_visible,
+        last_active,
         id,
     ) {
         return;
@@ -666,16 +686,23 @@ fn select_content_view(
     if !tabs.select_tab(id) {
         return;
     }
-    if let Some(previous) = previous.filter(|&previous| previous != id) {
+    // Only bookkeep last_active for a `previous` that's still a real tab:
+    // close_tab passes the just-closed tab's id here (see its call site),
+    // and that id no longer exists in `tabs`/`views` by this point, so
+    // recording it would leave a permanent stale entry that's never cleaned
+    // up (close_tab only clears last_active for the tab it's closing, once).
+    if let Some(previous) = previous
+        && tabs.tab(previous).is_some()
+    {
         last_active.insert(previous, Instant::now());
     }
 
-    for (view_id, view) in views.iter() {
-        let selected = *view_id == id;
-        let _ = view.set_visible(selected);
-        if selected {
-            let _ = view.focus();
-        }
+    if let Some(view) = previous.and_then(|previous| views.get(&previous)) {
+        let _ = view.set_visible(false);
+    }
+    if let Some(view) = views.get(&id) {
+        let _ = view.set_visible(true);
+        let _ = view.focus();
     }
 }
 
@@ -831,9 +858,6 @@ fn add_tab(
         theme,
     ) {
         Ok(view) => {
-            if let Some(previous) = previous {
-                last_active.insert(previous, Instant::now());
-            }
             histories.insert(id, TabHistory::new(url));
             views.insert(id, view);
             select_content_view(
@@ -845,6 +869,7 @@ fn add_tab(
                 theme,
                 sidebar_visible,
                 last_active,
+                previous,
                 id,
             );
             Ok(id)
@@ -875,6 +900,11 @@ fn close_tab(
         return CloseTabResult::Ignored;
     }
 
+    // Captured before remove_tab: TabManager::remove_tab auto-advances
+    // `current` to another tab when the closed tab was the active one, so
+    // tabs.current_id() read afterward can no longer tell select_content_view
+    // which view was actually on screen a moment ago.
+    let previous = tabs.current_id();
     views.remove(&id);
     histories.remove(&id);
     last_active.remove(&id);
@@ -911,6 +941,7 @@ fn close_tab(
             theme,
             sidebar_visible,
             last_active,
+            previous,
             current,
         );
     }
@@ -1337,6 +1368,7 @@ fn handle_mcp_request(
             let _ = reply.send(result != CloseTabResult::Ignored);
         }
         McpRequest::SelectTab { id, reply } => {
+            let previous = tabs.current_id();
             let selected = resolve_tab_id(tabs, id).is_some_and(|id| {
                 select_content_view(
                     window,
@@ -1347,6 +1379,7 @@ fn handle_mcp_request(
                     theme,
                     sidebar_visible,
                     last_active,
+                    previous,
                     id,
                 );
                 true
@@ -1484,6 +1517,7 @@ fn handle_mcp_request(
                 commands_tx,
                 theme,
                 sidebar_visible,
+                last_active,
                 id,
             ) {
                 let _ = reply.send(Err("target tab has no content view".to_owned()));
@@ -1608,6 +1642,7 @@ fn main() -> wry::Result<()> {
                 &mcp_http_state,
             ),
             Event::MainEventsCleared => {
+                let mut state_changed = false;
                 for event in content_events_rx.try_iter() {
                     match event {
                         ContentEvent::TitleChanged { id, title } => {
@@ -1616,12 +1651,14 @@ fn main() -> wry::Result<()> {
                                 if !is_new_tab_url(&tab.url) {
                                     history.update_latest_title(&tab.url, title);
                                 }
+                                state_changed = true;
                             }
                         }
                         ContentEvent::PageLoaded { id, url } => {
                             if let Some(tab) = tabs.tab_mut(id) {
                                 tab.url = url.clone();
                                 tab.favicon_url = None;
+                                state_changed = true;
                             }
                             if !is_new_tab_url(&url) {
                                 let title = tabs
@@ -1638,12 +1675,15 @@ fn main() -> wry::Result<()> {
                         ContentEvent::FaviconChanged { id, url } => {
                             if let Some(tab) = tabs.tab_mut(id) {
                                 tab.favicon_url = (!url.is_empty()).then_some(url);
+                                state_changed = true;
                             }
                         }
                         ContentEvent::MediaPlaybackChanged { id, playing } => {
                             playing_media.insert(id, playing);
                         }
                     }
+                }
+                if state_changed {
                     send_state(
                         &chrome,
                         &tabs,
@@ -1653,6 +1693,7 @@ fn main() -> wry::Result<()> {
                         mcp_enabled,
                         &mcp_http_state,
                     );
+                    state_changed = false;
                 }
 
                 for raw_command in commands_rx.try_iter() {
@@ -1661,11 +1702,18 @@ fn main() -> wry::Result<()> {
                     };
                     match command {
                         ChromeCommand::ChromeReady => {
+                            // The chrome UI starts from an empty placeholder
+                            // state (see emptyState in index.tsx) until this
+                            // fires, so it must always be answered with a
+                            // real send_state, not just when something
+                            // happens to change afterward.
                             if current_tab_is_new(&tabs) {
                                 focus_location(&window, &chrome, &mut palette_open);
                             }
+                            state_changed = true;
                         }
                         ChromeCommand::SelectTab { id } => {
+                            let previous = tabs.current_id();
                             if let Some(id) = resolve_tab_id(&tabs, id) {
                                 select_content_view(
                                     &window,
@@ -1676,8 +1724,10 @@ fn main() -> wry::Result<()> {
                                     &current_theme,
                                     sidebar_visible,
                                     &mut last_active,
+                                    previous,
                                     id,
                                 );
+                                state_changed = true;
                             }
                         }
                         ChromeCommand::NewTab { url } => {
@@ -1697,16 +1747,8 @@ fn main() -> wry::Result<()> {
                             .is_ok()
                             {
                                 bring_chrome_to_front(&chrome);
-                                send_state(
-                                    &chrome,
-                                    &tabs,
-                                    &views,
-                                    &bookmarks,
-                                    &settings,
-                                    mcp_enabled,
-                                    &mcp_http_state,
-                                );
                                 focus_location(&window, &chrome, &mut palette_open);
+                                state_changed = true;
                             }
                         }
                         ChromeCommand::CloseTab { id } => {
@@ -1727,6 +1769,9 @@ fn main() -> wry::Result<()> {
                                 );
                                 if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
+                                }
+                                if result != CloseTabResult::Ignored {
+                                    state_changed = true;
                                 }
                             }
                         }
@@ -1749,6 +1794,9 @@ fn main() -> wry::Result<()> {
                                 if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
                                 }
+                                if result != CloseTabResult::Ignored {
+                                    state_changed = true;
+                                }
                             }
                         }
                         ChromeCommand::Navigate { url } => {
@@ -1764,11 +1812,12 @@ fn main() -> wry::Result<()> {
                                     }
                                     .is_ok()
                                 });
-                                if navigated
-                                    && let Some(tab) = tabs.tab_mut(id)
-                                {
-                                    tab.url = url;
-                                    tab.favicon_url = None;
+                                if navigated {
+                                    if let Some(tab) = tabs.tab_mut(id) {
+                                        tab.url = url;
+                                        tab.favicon_url = None;
+                                    }
+                                    state_changed = true;
                                 }
                             }
                         }
@@ -1788,6 +1837,7 @@ fn main() -> wry::Result<()> {
                                     history.record_page_load(url);
                                 }
                                 update_history_flags(&mut tabs, &histories, id);
+                                state_changed = true;
                             }
                         }
                         ChromeCommand::OpenLocation => {
@@ -1802,6 +1852,7 @@ fn main() -> wry::Result<()> {
                                     let _ = view.go_back();
                                 }
                                 update_history_flags(&mut tabs, &histories, id);
+                                state_changed = true;
                             }
                         }
                         ChromeCommand::GoForward => {
@@ -1813,6 +1864,7 @@ fn main() -> wry::Result<()> {
                                     let _ = view.go_forward();
                                 }
                                 update_history_flags(&mut tabs, &histories, id);
+                                state_changed = true;
                             }
                         }
                         ChromeCommand::Reload => {
@@ -1844,6 +1896,7 @@ fn main() -> wry::Result<()> {
                                     tab.title.clone()
                                 };
                                 bookmarks.toggle(tab.url.clone(), title);
+                                state_changed = true;
                             }
                         }
                         ChromeCommand::SelectBookmark { url } => {
@@ -1859,16 +1912,19 @@ fn main() -> wry::Result<()> {
                                     }
                                     .is_ok()
                                 });
-                                if navigated
-                                    && let Some(tab) = tabs.tab_mut(id)
-                                {
-                                    tab.url = url;
-                                    tab.favicon_url = None;
+                                if navigated {
+                                    if let Some(tab) = tabs.tab_mut(id) {
+                                        tab.url = url;
+                                        tab.favicon_url = None;
+                                    }
+                                    state_changed = true;
                                 }
                             }
                         }
                         ChromeCommand::RemoveBookmark { url } => {
-                            bookmarks.remove(&url);
+                            if bookmarks.remove(&url) {
+                                state_changed = true;
+                            }
                         }
                         ChromeCommand::ClearHistory => {
                             history.clear();
@@ -1885,12 +1941,14 @@ fn main() -> wry::Result<()> {
                         ChromeCommand::SetSearchEngine { engine } => {
                             if let Ok(engine) = engine.parse() {
                                 settings.search_engine = engine;
+                                state_changed = true;
                             }
                         }
                         ChromeCommand::SetTheme { theme } => {
                             if let Ok(theme) = theme.parse::<Theme>() {
                                 settings.theme = theme;
                                 current_theme.set(theme);
+                                state_changed = true;
                             }
                         }
                         ChromeCommand::SetTabSuspendEnabled { enabled } => {
@@ -1902,14 +1960,19 @@ fn main() -> wry::Result<()> {
                                 );
                             }
                             settings.tab_suspend_enabled = enabled;
+                            state_changed = true;
                         }
                         ChromeCommand::SetTabSuspendGrace { secs } => {
                             // Lowering/raising this only changes future deadlines
                             // (tab_suspend_deadline reads last_active + grace fresh
                             // each sweep); it never resurrects a tab already
                             // suspended under the old value.
-                            settings.tab_suspend_grace_secs =
+                            let clamped =
                                 secs.clamp(MIN_TAB_SUSPEND_GRACE_SECS, MAX_TAB_SUSPEND_GRACE_SECS);
+                            if clamped != settings.tab_suspend_grace_secs {
+                                state_changed = true;
+                            }
+                            settings.tab_suspend_grace_secs = clamped;
                         }
                         ChromeCommand::SetMcpHttp { enabled, port } => {
                             if let Some(handle) = mcp_http.take() {
@@ -1921,6 +1984,7 @@ fn main() -> wry::Result<()> {
                             mcp_http_state.enabled = false;
                             mcp_http_state.port = port;
                             mcp_http_state.error = None;
+                            state_changed = true;
                             if enabled {
                                 match TcpListener::bind((Ipv4Addr::LOCALHOST, port)).and_then(
                                     |listener| {
@@ -1977,10 +2041,12 @@ fn main() -> wry::Result<()> {
                                 },
                             };
                             mcp_http_state.registration = Some(registration);
+                            state_changed = true;
                         }
                         ChromeCommand::SetLocale { locale } => {
                             if let Ok(locale) = locale.parse::<Locale>() {
                                 settings.locale = locale;
+                                state_changed = true;
                             }
                         }
                         // Content-originated messages are intercepted and rerouted to a
@@ -2013,15 +2079,6 @@ fn main() -> wry::Result<()> {
                             }
                         }
                     }
-                    send_state(
-                        &chrome,
-                        &tabs,
-                        &views,
-                        &bookmarks,
-                        &settings,
-                        mcp_enabled,
-                        &mcp_http_state,
-                    );
                 }
 
                 if settings.tab_suspend_enabled {
@@ -2034,16 +2091,19 @@ fn main() -> wry::Result<()> {
                         Instant::now(),
                     );
                     if suspended_any {
-                        send_state(
-                            &chrome,
-                            &tabs,
-                            &views,
-                            &bookmarks,
-                            &settings,
-                            mcp_enabled,
-                            &mcp_http_state,
-                        );
+                        state_changed = true;
                     }
+                }
+                if state_changed {
+                    send_state(
+                        &chrome,
+                        &tabs,
+                        &views,
+                        &bookmarks,
+                        &settings,
+                        mcp_enabled,
+                        &mcp_http_state,
+                    );
                 }
             }
             Event::WindowEvent { event, .. } => match event {
