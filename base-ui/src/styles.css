@@ -1,4 +1,5 @@
 :root {
+  --ui-font-scale: 1;
   color-scheme: dark;
   --text: #e9e9e3;
   --text-strong: #f1f2eb;
@@ -146,6 +147,10 @@ body,
   height: 100%;
   margin: 0;
   overflow: hidden;
+}
+
+#root {
+  zoom: var(--ui-font-scale);
 }
 
 button,
@@ -340,7 +345,7 @@ kbd {
 
 .tab {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) 20px;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: center;
   width: 100%;
   gap: 8px;
@@ -402,6 +407,36 @@ kbd {
   font-weight: 600;
   letter-spacing: 0.01em;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tab-suspended {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  color: var(--text-muted);
+}
+
+.tab-suspended svg {
+  width: 11px;
+  height: 11px;
+  fill: currentColor;
+  stroke: none;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
   white-space: nowrap;
 }
 
@@ -824,7 +859,7 @@ kbd {
   margin-bottom: 5px;
   color: var(--accent);
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 8px;
+  font-size: 10px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
@@ -883,7 +918,7 @@ kbd {
 .settings-nav-index {
   color: var(--text-subtle);
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 8px;
+  font-size: 10px;
   letter-spacing: 0.06em;
 }
 
@@ -893,7 +928,7 @@ kbd {
 
 .settings-nav-item > span:last-child {
   overflow: hidden;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -926,7 +961,7 @@ kbd {
 .settings-category-header p {
   margin: 0;
   color: var(--text-copy-muted);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -937,6 +972,17 @@ kbd {
   max-width: 390px;
   flex-direction: column;
   gap: 5px;
+}
+
+.settings-subheading {
+  margin: 22px 0 8px;
+  color: var(--text-heading);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.font-size-options {
+  flex-direction: row;
 }
 
 .search-engine-option,
@@ -1019,7 +1065,7 @@ kbd {
 .engine-copy span {
   color: var(--text-subtle);
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .privacy-action {
@@ -1055,7 +1101,7 @@ kbd {
 
 .privacy-action small {
   color: var(--text-subtle);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .privacy-action svg {
@@ -1065,7 +1111,7 @@ kbd {
 .mcp-overview {
   margin: 0 0 20px;
   color: var(--text-copy-muted);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.7;
 }
 
@@ -1085,18 +1131,18 @@ kbd {
 
 .mcp-info-block h3,
 .mcp-registration-block h3,
-.mcp-http-block h3,
+.settings-toggle-block h3,
 .mcp-tools-section h3 {
   margin: 0 0 8px;
   color: var(--text-heading);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 650;
 }
 
 .mcp-info-block p {
   margin: 0;
   color: var(--text-subtle);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.55;
 }
 
@@ -1119,7 +1165,7 @@ kbd {
 .mcp-registration-block > div > p {
   margin: 0;
   color: var(--text-subtle);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.55;
 }
 
@@ -1130,7 +1176,7 @@ kbd {
   border: 1px solid var(--accent);
   border-radius: 3px;
   cursor: pointer;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 650;
 }
 
@@ -1145,7 +1191,7 @@ kbd {
 .mcp-registration-success {
   margin: 0;
   color: var(--accent);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
@@ -1168,7 +1214,7 @@ kbd {
   background: var(--field-bg);
   border: 1px solid var(--border-control);
   border-radius: 2px;
-  font: 8px "SFMono-Regular", Consolas, monospace;
+  font: 10px "SFMono-Regular", Consolas, monospace;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1203,7 +1249,7 @@ kbd {
   box-shadow: 0 0 0 3px var(--accent-bg);
 }
 
-.mcp-http-block {
+.settings-toggle-block {
   margin-top: 8px;
   padding: 14px;
   background: var(--option-bg);
@@ -1211,18 +1257,18 @@ kbd {
   border-radius: 3px;
 }
 
-.mcp-http-heading {
+.settings-toggle-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
 }
 
-.mcp-http-heading p {
+.settings-toggle-heading p {
   max-width: 390px;
   margin: 0;
   color: var(--text-subtle);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.55;
 }
 
@@ -1282,7 +1328,7 @@ kbd {
   gap: 9px;
   margin-top: 13px;
   color: var(--text-copy-muted);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .mcp-http-port input {
@@ -1292,7 +1338,7 @@ kbd {
   background: var(--field-bg);
   border: 1px solid var(--border-control);
   border-radius: 2px;
-  font: 9px "SFMono-Regular", Consolas, monospace;
+  font: 11px "SFMono-Regular", Consolas, monospace;
 }
 
 .mcp-http-port input[aria-invalid="true"] {
@@ -1305,18 +1351,18 @@ kbd {
   gap: 5px;
   margin-top: 12px;
   color: var(--text-copy-muted);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .mcp-http-endpoint code {
   color: var(--accent);
-  font: 8px "SFMono-Regular", Consolas, monospace;
+  font: 10px "SFMono-Regular", Consolas, monospace;
 }
 
 .mcp-http-error {
   margin: 8px 0 0;
   color: var(--danger);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
@@ -1331,7 +1377,7 @@ kbd {
 .settings-hint {
   margin: 6px 0 0;
   color: var(--text-copy-muted);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
@@ -1358,12 +1404,12 @@ kbd {
 
 .mcp-tool-list code {
   color: var(--accent);
-  font: 8px/1.45 "SFMono-Regular", Consolas, monospace;
+  font: 10px/1.45 "SFMono-Regular", Consolas, monospace;
 }
 
 .mcp-tool-list span {
   color: var(--text-copy-muted);
-  font-size: 8px;
+  font-size: 10px;
   line-height: 1.45;
 }
 
