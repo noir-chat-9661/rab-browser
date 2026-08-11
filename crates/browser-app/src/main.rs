@@ -608,6 +608,7 @@ fn ensure_content_view(
     commands_tx: &Sender<String>,
     theme: &Rc<Cell<Theme>>,
     sidebar_visible: bool,
+    last_active: &mut BTreeMap<TabId, Instant>,
     id: TabId,
 ) -> bool {
     if views.contains_key(&id) {
@@ -628,6 +629,7 @@ fn ensure_content_view(
         return false;
     };
     views.insert(id, view);
+    last_active.insert(id, Instant::now());
     true
 }
 
@@ -647,6 +649,9 @@ fn select_content_view(
     if tabs.tab(id).is_none() {
         return;
     }
+    if previous == Some(id) {
+        return;
+    }
 
     // Ensure the target tab has a view before changing selection. If creation
     // fails, leaving the previous tab selected is the smaller failure.
@@ -658,6 +663,7 @@ fn select_content_view(
         commands_tx,
         theme,
         sidebar_visible,
+        last_active,
         id,
     ) {
         return;
@@ -666,16 +672,16 @@ fn select_content_view(
     if !tabs.select_tab(id) {
         return;
     }
-    if let Some(previous) = previous.filter(|&previous| previous != id) {
+    if let Some(previous) = previous {
         last_active.insert(previous, Instant::now());
     }
 
-    for (view_id, view) in views.iter() {
-        let selected = *view_id == id;
-        let _ = view.set_visible(selected);
-        if selected {
-            let _ = view.focus();
-        }
+    if let Some(view) = previous.and_then(|previous| views.get(&previous)) {
+        let _ = view.set_visible(false);
+    }
+    if let Some(view) = views.get(&id) {
+        let _ = view.set_visible(true);
+        let _ = view.focus();
     }
 }
 
@@ -1484,6 +1490,7 @@ fn handle_mcp_request(
                 commands_tx,
                 theme,
                 sidebar_visible,
+                last_active,
                 id,
             ) {
                 let _ = reply.send(Err("target tab has no content view".to_owned()));
@@ -1608,6 +1615,7 @@ fn main() -> wry::Result<()> {
                 &mcp_http_state,
             ),
             Event::MainEventsCleared => {
+                let mut state_changed = false;
                 for event in content_events_rx.try_iter() {
                     match event {
                         ContentEvent::TitleChanged { id, title } => {
@@ -1616,12 +1624,14 @@ fn main() -> wry::Result<()> {
                                 if !is_new_tab_url(&tab.url) {
                                     history.update_latest_title(&tab.url, title);
                                 }
+                                state_changed = true;
                             }
                         }
                         ContentEvent::PageLoaded { id, url } => {
                             if let Some(tab) = tabs.tab_mut(id) {
                                 tab.url = url.clone();
                                 tab.favicon_url = None;
+                                state_changed = true;
                             }
                             if !is_new_tab_url(&url) {
                                 let title = tabs
@@ -1638,12 +1648,15 @@ fn main() -> wry::Result<()> {
                         ContentEvent::FaviconChanged { id, url } => {
                             if let Some(tab) = tabs.tab_mut(id) {
                                 tab.favicon_url = (!url.is_empty()).then_some(url);
+                                state_changed = true;
                             }
                         }
                         ContentEvent::MediaPlaybackChanged { id, playing } => {
                             playing_media.insert(id, playing);
                         }
                     }
+                }
+                if state_changed {
                     send_state(
                         &chrome,
                         &tabs,
@@ -1653,6 +1666,7 @@ fn main() -> wry::Result<()> {
                         mcp_enabled,
                         &mcp_http_state,
                     );
+                    state_changed = false;
                 }
 
                 for raw_command in commands_rx.try_iter() {
@@ -1661,9 +1675,15 @@ fn main() -> wry::Result<()> {
                     };
                     match command {
                         ChromeCommand::ChromeReady => {
+                            // The chrome UI starts from an empty placeholder
+                            // state (see emptyState in index.tsx) until this
+                            // fires, so it must always be answered with a
+                            // real send_state, not just when something
+                            // happens to change afterward.
                             if current_tab_is_new(&tabs) {
                                 focus_location(&window, &chrome, &mut palette_open);
                             }
+                            state_changed = true;
                         }
                         ChromeCommand::SelectTab { id } => {
                             if let Some(id) = resolve_tab_id(&tabs, id) {
@@ -1678,6 +1698,7 @@ fn main() -> wry::Result<()> {
                                     &mut last_active,
                                     id,
                                 );
+                                state_changed = true;
                             }
                         }
                         ChromeCommand::NewTab { url } => {
@@ -1697,16 +1718,8 @@ fn main() -> wry::Result<()> {
                             .is_ok()
                             {
                                 bring_chrome_to_front(&chrome);
-                                send_state(
-                                    &chrome,
-                                    &tabs,
-                                    &views,
-                                    &bookmarks,
-                                    &settings,
-                                    mcp_enabled,
-                                    &mcp_http_state,
-                                );
                                 focus_location(&window, &chrome, &mut palette_open);
+                                state_changed = true;
                             }
                         }
                         ChromeCommand::CloseTab { id } => {
@@ -1727,6 +1740,9 @@ fn main() -> wry::Result<()> {
                                 );
                                 if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
+                                }
+                                if result != CloseTabResult::Ignored {
+                                    state_changed = true;
                                 }
                             }
                         }
@@ -1749,6 +1765,9 @@ fn main() -> wry::Result<()> {
                                 if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
                                 }
+                                if result != CloseTabResult::Ignored {
+                                    state_changed = true;
+                                }
                             }
                         }
                         ChromeCommand::Navigate { url } => {
@@ -1764,11 +1783,12 @@ fn main() -> wry::Result<()> {
                                     }
                                     .is_ok()
                                 });
-                                if navigated
-                                    && let Some(tab) = tabs.tab_mut(id)
-                                {
-                                    tab.url = url;
-                                    tab.favicon_url = None;
+                                if navigated {
+                                    if let Some(tab) = tabs.tab_mut(id) {
+                                        tab.url = url;
+                                        tab.favicon_url = None;
+                                    }
+                                    state_changed = true;
                                 }
                             }
                         }
@@ -1788,6 +1808,7 @@ fn main() -> wry::Result<()> {
                                     history.record_page_load(url);
                                 }
                                 update_history_flags(&mut tabs, &histories, id);
+                                state_changed = true;
                             }
                         }
                         ChromeCommand::OpenLocation => {
@@ -1802,6 +1823,7 @@ fn main() -> wry::Result<()> {
                                     let _ = view.go_back();
                                 }
                                 update_history_flags(&mut tabs, &histories, id);
+                                state_changed = true;
                             }
                         }
                         ChromeCommand::GoForward => {
@@ -1813,6 +1835,7 @@ fn main() -> wry::Result<()> {
                                     let _ = view.go_forward();
                                 }
                                 update_history_flags(&mut tabs, &histories, id);
+                                state_changed = true;
                             }
                         }
                         ChromeCommand::Reload => {
@@ -1844,6 +1867,7 @@ fn main() -> wry::Result<()> {
                                     tab.title.clone()
                                 };
                                 bookmarks.toggle(tab.url.clone(), title);
+                                state_changed = true;
                             }
                         }
                         ChromeCommand::SelectBookmark { url } => {
@@ -1859,16 +1883,19 @@ fn main() -> wry::Result<()> {
                                     }
                                     .is_ok()
                                 });
-                                if navigated
-                                    && let Some(tab) = tabs.tab_mut(id)
-                                {
-                                    tab.url = url;
-                                    tab.favicon_url = None;
+                                if navigated {
+                                    if let Some(tab) = tabs.tab_mut(id) {
+                                        tab.url = url;
+                                        tab.favicon_url = None;
+                                    }
+                                    state_changed = true;
                                 }
                             }
                         }
                         ChromeCommand::RemoveBookmark { url } => {
-                            bookmarks.remove(&url);
+                            if bookmarks.remove(&url) {
+                                state_changed = true;
+                            }
                         }
                         ChromeCommand::ClearHistory => {
                             history.clear();
@@ -1885,12 +1912,14 @@ fn main() -> wry::Result<()> {
                         ChromeCommand::SetSearchEngine { engine } => {
                             if let Ok(engine) = engine.parse() {
                                 settings.search_engine = engine;
+                                state_changed = true;
                             }
                         }
                         ChromeCommand::SetTheme { theme } => {
                             if let Ok(theme) = theme.parse::<Theme>() {
                                 settings.theme = theme;
                                 current_theme.set(theme);
+                                state_changed = true;
                             }
                         }
                         ChromeCommand::SetTabSuspendEnabled { enabled } => {
@@ -1902,14 +1931,19 @@ fn main() -> wry::Result<()> {
                                 );
                             }
                             settings.tab_suspend_enabled = enabled;
+                            state_changed = true;
                         }
                         ChromeCommand::SetTabSuspendGrace { secs } => {
                             // Lowering/raising this only changes future deadlines
                             // (tab_suspend_deadline reads last_active + grace fresh
                             // each sweep); it never resurrects a tab already
                             // suspended under the old value.
-                            settings.tab_suspend_grace_secs =
+                            let clamped =
                                 secs.clamp(MIN_TAB_SUSPEND_GRACE_SECS, MAX_TAB_SUSPEND_GRACE_SECS);
+                            if clamped != settings.tab_suspend_grace_secs {
+                                state_changed = true;
+                            }
+                            settings.tab_suspend_grace_secs = clamped;
                         }
                         ChromeCommand::SetMcpHttp { enabled, port } => {
                             if let Some(handle) = mcp_http.take() {
@@ -1921,6 +1955,7 @@ fn main() -> wry::Result<()> {
                             mcp_http_state.enabled = false;
                             mcp_http_state.port = port;
                             mcp_http_state.error = None;
+                            state_changed = true;
                             if enabled {
                                 match TcpListener::bind((Ipv4Addr::LOCALHOST, port)).and_then(
                                     |listener| {
@@ -1977,10 +2012,12 @@ fn main() -> wry::Result<()> {
                                 },
                             };
                             mcp_http_state.registration = Some(registration);
+                            state_changed = true;
                         }
                         ChromeCommand::SetLocale { locale } => {
                             if let Ok(locale) = locale.parse::<Locale>() {
                                 settings.locale = locale;
+                                state_changed = true;
                             }
                         }
                         // Content-originated messages are intercepted and rerouted to a
@@ -2013,15 +2050,6 @@ fn main() -> wry::Result<()> {
                             }
                         }
                     }
-                    send_state(
-                        &chrome,
-                        &tabs,
-                        &views,
-                        &bookmarks,
-                        &settings,
-                        mcp_enabled,
-                        &mcp_http_state,
-                    );
                 }
 
                 if settings.tab_suspend_enabled {
@@ -2034,16 +2062,19 @@ fn main() -> wry::Result<()> {
                         Instant::now(),
                     );
                     if suspended_any {
-                        send_state(
-                            &chrome,
-                            &tabs,
-                            &views,
-                            &bookmarks,
-                            &settings,
-                            mcp_enabled,
-                            &mcp_http_state,
-                        );
+                        state_changed = true;
                     }
+                }
+                if state_changed {
+                    send_state(
+                        &chrome,
+                        &tabs,
+                        &views,
+                        &bookmarks,
+                        &settings,
+                        mcp_enabled,
+                        &mcp_http_state,
+                    );
                 }
             }
             Event::WindowEvent { event, .. } => match event {
