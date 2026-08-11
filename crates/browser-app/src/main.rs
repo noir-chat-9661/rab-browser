@@ -2847,6 +2847,22 @@ args = ["--serve"]
     }
 
     #[test]
+    fn restores_the_normal_grace_once_a_new_tab_navigates_away() {
+        let mut tabs = TabManager::new();
+        let id = tabs.add_tab(NEW_TAB_URL);
+        tabs.tab_mut(id).unwrap().url = "https://example.com".to_owned();
+        let last_used = Instant::now();
+        let last_active = BTreeMap::from([(id, last_used)]);
+        let playing_media = BTreeMap::new();
+        let grace = Duration::from_secs(DEFAULT_TAB_SUSPEND_GRACE_SECS);
+
+        assert_eq!(
+            tab_suspend_deadline(&tabs, id, &last_active, &playing_media, None, grace),
+            Some(last_used + grace)
+        );
+    }
+
+    #[test]
     fn restarting_tab_suspend_grace_resets_last_active_for_backgrounded_tabs() {
         let mut tabs = TabManager::new();
         let stale = tabs.add_tab("https://stale.example.com");
