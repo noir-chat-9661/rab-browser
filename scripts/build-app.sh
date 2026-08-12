@@ -17,7 +17,11 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-version="$(sed -n 's/^version = "\(.*\)"/\1/p' crates/browser-app/Cargo.toml | head -1)"
+version="$(sed -n '/^version = /{s/^version = "\(.*\)"/\1/p;q;}' crates/browser-app/Cargo.toml)"
+if [[ -z "$version" ]]; then
+  echo "Could not extract version from crates/browser-app/Cargo.toml" >&2
+  exit 1
+fi
 app_name="rab-browser"
 bundle_id="com.noir-chat-9661.rab-browser"
 
@@ -66,9 +70,8 @@ cat > "$contents_dir/Info.plist" <<PLIST
 PLIST
 
 # No CFBundleIconFile entry above: no .icns asset exists yet, so the bundle
-# intentionally falls back to the generic macOS app icon until one is added
-# (see scripts/README section in the main README for how to wire one in
-# under Resources/ + CFBundleIconFile once an icon is designed).
+# intentionally falls back to the generic macOS app icon. Once one is
+# designed, add it to Resources/ and set CFBundleIconFile above.
 
 echo "==> codesign --sign - (ad-hoc)"
 codesign --force --deep --sign - "$app_dir"
