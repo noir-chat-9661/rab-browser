@@ -42,6 +42,16 @@ rab-browser/
 cargo run -p browser-app -- https://example.com
 ```
 
+### `.app`バンドルとしてビルドする
+
+```bash
+./scripts/build-app.sh
+```
+
+`target/release/rab-browser.app` が生成される(Finderからダブルクリック起動可能)。
+ad-hoc署名(`codesign --sign -`)のみを行っており、配布用のDeveloper ID署名・
+notarizationは未対応。ローカルでの動作確認用(パスキー/WebAuthn関連の検証など)に使う。
+
 ### 主なキーボードショートカット
 
 | ショートカット | 動作 |
