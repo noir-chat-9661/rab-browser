@@ -135,3 +135,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 - `main`への直接コミットは行わない。作業は `git worktree` で `.worktrees/<name>`(gitignore対象)配下に
   ブランチを切ってから行う
 - Issue単位でタスクを分解し、実装後はPRを作成してレビュー・マージする
+
+## ライセンス
+
+[MIT license](LICENSE-MIT) と [Apache License, Version 2.0](LICENSE-APACHE) のデュアルライセンスで公開している。
+どちらか一方の条件を選んで利用できる。
