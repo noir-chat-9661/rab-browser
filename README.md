@@ -10,6 +10,11 @@
 現状**macOS専用**。設計判断の詳細・技術選定の根拠・開発フェーズの記録は
 [`docs/architecture.md`](./docs/architecture.md) を参照。
 
+**現在ベータ版。** ビルド済み`.app`は [Releases](https://github.com/noir-chat-9661/rab-browser/releases)
+から入手できる。ad-hoc署名のみのため、初回起動時はGatekeeperの警告が出る
+(右クリック→「開く」で許可するか、`xattr -d com.apple.quarantine rab-browser.app` で
+quarantine属性を削除する)。
+
 ## 使い方
 
 前提: macOS、Rust(edition 2024)、[pnpm](https://pnpm.io/)。
