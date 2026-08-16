@@ -76,5 +76,10 @@ PLIST
 echo "==> codesign --sign - (ad-hoc)"
 codesign --force --deep --sign - "$app_dir"
 
-echo "==> done: $app_dir"
+dmg_path="target/release/${app_name}-${version}.dmg"
+echo "==> hdiutil create (.dmg)"
+rm -f "$dmg_path"
+hdiutil create -volname "$app_name" -srcfolder "$app_dir" -ov -format UDZO "$dmg_path"
+
+echo "==> done: $app_dir, $dmg_path"
 open -R "$app_dir" 2>/dev/null || true
