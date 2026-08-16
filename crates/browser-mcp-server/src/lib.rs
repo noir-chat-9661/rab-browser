@@ -307,9 +307,15 @@ impl BrowserMcpServer {
         let script = wrapped_script(&format!(
             "const el=document.querySelector({selector});\
              if(!el) throw new Error('element not found');\
-             el.focus(); el.value={text};\
+             el.focus();\
+             const proto=el instanceof HTMLTextAreaElement?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;\
+             const setter=Object.getOwnPropertyDescriptor(proto,'value')?.set;\
+             if(setter) setter.call(el,{text}); else el.value={text};\
              el.dispatchEvent(new Event('input',{{bubbles:true}}));\
              el.dispatchEvent(new Event('change',{{bubbles:true}}));\
+             const propsKey=Object.keys(el).find(k=>k.startsWith('__reactProps$'));\
+             const onChange=propsKey&&el[propsKey]?.onChange;\
+             if(onChange) onChange({{target:el,currentTarget:el}});\
              return 'ok';"
         ));
         self.eval(params.0.target, script).await
@@ -576,6 +582,36 @@ mod tests {
             .click(Parameters(ClickParams {
                 selector: "#submit".to_owned(),
                 target: Some(7),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(result, "ok");
+    }
+
+    #[tokio::test]
+    async fn type_sets_value_via_native_setter_and_react_fallback() {
+        let server = server(|request| {
+            let McpRequest::Eval { script, reply, .. } = request else {
+                panic!("unexpected request");
+            };
+            // Native setter bypass (works for plain DOM and most frameworks)...
+            assert!(script.contains("getOwnPropertyDescriptor"));
+            assert!(script.contains("dispatchEvent(new Event('input'"));
+            assert!(script.contains("dispatchEvent(new Event('change'"));
+            // ...plus a direct React 19 controlled-input onChange fallback,
+            // since the above alone doesn't reliably update React 19 state
+            // (see issue #71).
+            assert!(script.contains("__reactProps$"));
+            assert!(script.contains("onChange"));
+            reply.send(Ok("ok".to_owned())).unwrap();
+            Ok(())
+        });
+
+        let result = server
+            .r#type(Parameters(TypeParams {
+                selector: "#name".to_owned(),
+                text: "hello".to_owned(),
+                target: None,
             }))
             .await
             .unwrap();
