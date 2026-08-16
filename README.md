@@ -14,7 +14,7 @@
 - **Phase 0**: 技術検証スパイク(wry+tao のマルチWebView合成、rmcp最小サーバー) — 完了
 - **Phase 1**: 最小WebView表示ブラウザ(単一タブ、URL入力、devtools) — 完了
 - **Phase 2**: 縦型サイドバータブUI・複数タブ管理・コマンドパレット(Zen/Arc風) — 完了
-- **Phase 3**: MCP機能拡張基盤(ブラウザ自身がMCPサーバーになる) — 進行中
+- **Phase 3**: MCP機能拡張基盤(ブラウザ自身がMCPサーバーになる) — 完了
 - 既知の未解決事項: パスキー(WebAuthn)がWKWebView上で失敗する問題( [#9](https://github.com/noir-chat-9661/rab-browser/issues/9) )。署名済み`.app`バンドル化が必要な可能性が高く、後回しにしている
 
 ## 構成
