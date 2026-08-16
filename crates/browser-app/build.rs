@@ -8,7 +8,10 @@ use std::{path::Path, process::Command};
 fn main() {
     let base_ui_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../base-ui");
 
-    println!("cargo:rerun-if-changed={}", base_ui_dir.join("src").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        base_ui_dir.join("src").display()
+    );
     println!(
         "cargo:rerun-if-changed={}",
         base_ui_dir.join("index.html").display()
