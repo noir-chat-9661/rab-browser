@@ -5,34 +5,14 @@
 軽量なWebブラウザ。現行の主要ブラウザ(Chrome/Edge/Firefox系)がメモリ・CPUともに重いことへの
 不満が動機で、Rustはあくまで「軽量」という目的のための手段。OS標準WebView(macOS=WKWebView)を
 `wry`/`tao`で直接制御し、UI(サイドバータブ・コマンドパレット)はSolid.js製の別WebViewとして
-実装している。将来的にはMCP経由で機能を選択的に有効化できるプラグイン機構を持たせる予定。
+実装している。
 
-設計判断の詳細・技術選定の根拠・フェーズ計画は [`docs/architecture.md`](./docs/architecture.md) を参照。
+現状**macOS専用**。設計判断の詳細・技術選定の根拠・開発フェーズの記録は
+[`docs/architecture.md`](./docs/architecture.md) を参照。
 
-## 状態
+## 使い方
 
-- **Phase 0**: 技術検証スパイク(wry+tao のマルチWebView合成、rmcp最小サーバー) — 完了
-- **Phase 1**: 最小WebView表示ブラウザ(単一タブ、URL入力、devtools) — 完了
-- **Phase 2**: 縦型サイドバータブUI・複数タブ管理・コマンドパレット(Zen/Arc風) — 完了
-- **Phase 3**: MCP機能拡張基盤(ブラウザ自身がMCPサーバーになる) — 完了
-- 既知の未解決事項: パスキー(WebAuthn)がWKWebView上で失敗する問題( [#9](https://github.com/noir-chat-9661/rab-browser/issues/9) )。署名済み`.app`バンドル化が必要な可能性が高く、後回しにしている
-
-## 構成
-
-```
-rab-browser/
-├── crates/
-│   ├── browser-core/         # Tab/TabManager, BrowserEngine trait(GUI非依存)
-│   ├── browser-engine-wry/   # wry/tao によるWebViewエンジン実装
-│   └── browser-app/          # バイナリ本体。ウィンドウ・クロームWebView・IPC統合
-├── base-ui/                # サイドバー・タブUI・コマンドパレット(Solid.js + Vite)
-├── spikes/                   # Phase 0の技術検証用の使い捨てコード
-└── docs/architecture.md      # 設計計画・技術選定の記録
-```
-
-## 開発
-
-前提: Rust(edition 2024)、[pnpm](https://pnpm.io/)。macOS(WKWebView)を主眼に開発している。
+前提: macOS、Rust(edition 2024)、[pnpm](https://pnpm.io/)。
 
 ```bash
 # ブラウザ本体を起動(引数で初期URLを指定可能)。crates/browser-app/build.rs が
@@ -56,12 +36,13 @@ notarizationは未対応。ローカルでの動作確認用(パスキー/WebAut
 
 | ショートカット | 動作 |
 |---|---|
-| `Cmd+L` (macOS) / `Ctrl+L` (Windows/Linux) | コマンドパレットを開く(URL入力) |
-| `Cmd+T` (macOS) / `Ctrl+T` (Windows/Linux) | 新規タブを作成 |
-| `Cmd+W` (macOS) / `Ctrl+W` (Windows/Linux) | 現在のタブを閉じる |
-| `Cmd+R` (macOS) / `Ctrl+R` (Windows/Linux) | 現在のタブをリロード |
-| `F12` / `Cmd+Option+I` (macOS) / `Ctrl+Alt+I` (Windows/Linux) | 開発者ツール(Web Inspector)を開く |
-| `Cmd+クリック` (macOS) / `Ctrl+クリック` (Windows/Linux) | リンクを新規タブで開く |
+| `Cmd+L` | コマンドパレットを開く(URL入力) |
+| `Cmd+T` | 新規タブを作成 |
+| `Cmd+W` | 現在のタブを閉じる |
+| `Cmd+R` | 現在のタブをリロード |
+| `Cmd+[` / `Cmd+]` | 戻る / 進む |
+| `F12` / `Cmd+Option+I` | 開発者ツール(Web Inspector)を開く |
+| `Cmd+クリック` | リンクを新規タブで開く |
 
 ## 機能
 
@@ -132,19 +113,10 @@ Streamable HTTPはローカルホストのみにbindし、DNS rebinding対策と
 loopbackホストに制限している。ただし認証はないため、同じマシン上のすべてのプロセスが
 ブラウザを操作できる。信頼できないプロセスが動作している環境では有効にしないこと。
 
-## テスト・Lint
+## 開発への貢献
 
-```bash
-cargo build --workspace   # base-ui/dist も自動ビルドされる
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-```
-
-## Git運用
-
-- `main`への直接コミットは行わない。作業は `git worktree` で `.worktrees/<name>`(gitignore対象)配下に
-  ブランチを切ってから行う
-- Issue単位でタスクを分解し、実装後はPRを作成してレビュー・マージする
+ビルド構成・テスト/Lintコマンド・ブランチ運用など開発者向けの情報は
+[`docs/architecture.md`](./docs/architecture.md) を参照。
 
 ## ライセンス
 

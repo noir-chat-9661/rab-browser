@@ -180,3 +180,48 @@ Codexのサンドボックスにはディスプレイセッションがなく上
 - 結論: クラッシュしないことは実機で確認済み。見た目の合成品質(最大のリスク項目)は
   未確認のまま。Phase 1着手前に、ユーザー自身が一度 `cargo run -p webview-compose-spike`
   を実行して目視確認することを推奨する。
+
+## 実装状況
+
+- **Phase 0**: 技術検証スパイク — 完了
+- **Phase 1**: 最小WebView表示ブラウザ — 完了
+- **Phase 2**: タブ / Zen・Arc風UI — 完了
+- **Phase 3**: MCP機能拡張基盤 — 完了
+- **Phase 4**: Zen/Arc体験の拡充(Spaces/Workspaces等) — 未着手
+- 既知の未解決事項: パスキー(WebAuthn)がWKWebView上で失敗する問題
+  ( [#9](https://github.com/noir-chat-9661/rab-browser/issues/9) )。署名済み`.app`
+  バンドル化が必要な可能性が高く、後回しにしている
+
+## ディレクトリ構成(実態)
+
+```
+rab-browser/
+├── crates/
+│   ├── browser-core/         # Tab/TabManager, BrowserEngine trait(GUI非依存)
+│   ├── browser-engine-wry/   # wry/tao によるWebViewエンジン実装
+│   ├── browser-app/          # バイナリ本体。ウィンドウ・クロームWebView・IPC統合
+│   └── browser-mcp-server/   # rmcpベースのMCPサーバー実装
+├── base-ui/                # サイドバー・タブUI・コマンドパレット(Solid.js + Vite)
+├── spikes/                   # Phase 0の技術検証用の使い捨てコード
+├── skills/rab-browser-mcp/   # MCPツールの使い方をまとめたAIエージェント向けskill
+├── scripts/build-app.sh      # .appバンドルのビルドスクリプト
+└── docs/architecture.md      # 本ファイル
+```
+
+`browser-plugins`(FeatureModule方式のプラグインレジストリ)は計画段階で、まだ実装されていない。
+
+## 開発
+
+前提: Rust(edition 2024)、[pnpm](https://pnpm.io/)。macOS(WKWebView)を主眼に開発している。
+
+```bash
+cargo build --workspace   # base-ui/dist も自動ビルドされる
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+### Git運用
+
+- `main`への直接コミットは行わない。作業は `git worktree` で `.worktrees/<name>`(gitignore対象)配下に
+  ブランチを切ってから行う
+- Issue単位でタスクを分解し、実装後はPRを作成してレビュー・マージする
