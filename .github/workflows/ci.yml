@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: base-ui (typecheck + build)
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: base-ui/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: base-ui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: base-ui
+      - run: pnpm build
+        working-directory: base-ui
+
+  # rab-browser targets macOS (WKWebView) only, and browser-engine-wry links
+  # AppKit/WebKit via objc2 under #[cfg(target_os = "macos")], so this can't
+  # build on Linux runners.
+  rust:
+    name: cargo build/test/clippy/fmt (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo build --workspace
+      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets -- -D warnings

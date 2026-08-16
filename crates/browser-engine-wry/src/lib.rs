@@ -445,10 +445,7 @@ fn appkit_rect(window: &Window, bounds: Rect) -> NSRect {
     let scale_factor = window.scale_factor();
     let position = bounds.position.to_logical::<f64>(scale_factor);
     let size = bounds.size.to_logical::<f64>(scale_factor);
-    let window_height = window
-        .inner_size()
-        .to_logical::<f64>(scale_factor)
-        .height;
+    let window_height = window.inner_size().to_logical::<f64>(scale_factor).height;
     NSRect::new(
         NSPoint::new(position.x, window_height - position.y - size.height),
         NSSize::new(size.width, size.height),
