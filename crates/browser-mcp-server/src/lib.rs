@@ -304,12 +304,36 @@ impl BrowserMcpServer {
     async fn r#type(&self, params: Parameters<TypeParams>) -> Result<String, ErrorData> {
         let selector = js_string(&params.0.selector)?;
         let text = js_string(&params.0.text)?;
+        // The native-setter + input/change dispatch below is the standard,
+        // framework-agnostic way to update a controlled input, but issue #71
+        // found it unreliable against a React 19 controlled input (its
+        // internal onChange never fired). The React fiber-props onChange
+        // call afterward is a verified-working fallback for that case. This
+        // does mean onChange can fire twice on frameworks/versions where the
+        // native path already worked — accepted as a low-risk trade-off
+        // (ponytail: same-value re-fires are typically idempotent; upgrade
+        // path if this bites someone is to detect the native path's success
+        // before falling back, which needs framework-version-specific
+        // internals we don't have a reliable read on generically).
         let script = wrapped_script(&format!(
             "const el=document.querySelector({selector});\
              if(!el) throw new Error('element not found');\
-             el.focus(); el.value={text};\
+             el.focus();\
+             try {{\
+               const proto=Object.getPrototypeOf(el);\
+               const setter=Object.getOwnPropertyDescriptor(proto,'value')?.set;\
+               if(setter) setter.call(el,{text}); else el.value={text};\
+             }} catch(_) {{ el.value={text}; }}\
              el.dispatchEvent(new Event('input',{{bubbles:true}}));\
              el.dispatchEvent(new Event('change',{{bubbles:true}}));\
+             const propsKey=Object.keys(el).find(k=>k.startsWith('__reactProps$')||k.startsWith('__reactEventHandlers$'));\
+             const onChange=propsKey&&el[propsKey]?.onChange;\
+             if(onChange) {{\
+               try {{\
+                 onChange({{target:el,currentTarget:el,type:'change',\
+                   preventDefault(){{}},stopPropagation(){{}},persist(){{}}}});\
+               }} catch(_) {{}}\
+             }}\
              return 'ok';"
         ));
         self.eval(params.0.target, script).await
@@ -576,6 +600,36 @@ mod tests {
             .click(Parameters(ClickParams {
                 selector: "#submit".to_owned(),
                 target: Some(7),
+            }))
+            .await
+            .unwrap();
+        assert_eq!(result, "ok");
+    }
+
+    #[tokio::test]
+    async fn type_sets_value_via_native_setter_and_react_fallback() {
+        let server = server(|request| {
+            let McpRequest::Eval { script, reply, .. } = request else {
+                panic!("unexpected request");
+            };
+            // Native setter bypass (works for plain DOM and most frameworks)...
+            assert!(script.contains("getOwnPropertyDescriptor"));
+            assert!(script.contains("dispatchEvent(new Event('input'"));
+            assert!(script.contains("dispatchEvent(new Event('change'"));
+            // ...plus a direct React 19 controlled-input onChange fallback,
+            // since the above alone doesn't reliably update React 19 state
+            // (see issue #71).
+            assert!(script.contains("__reactProps$"));
+            assert!(script.contains("onChange"));
+            reply.send(Ok("ok".to_owned())).unwrap();
+            Ok(())
+        });
+
+        let result = server
+            .r#type(Parameters(TypeParams {
+                selector: "#name".to_owned(),
+                text: "hello".to_owned(),
+                target: None,
             }))
             .await
             .unwrap();
