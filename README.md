@@ -7,17 +7,20 @@
 `wry`/`tao`で直接制御し、UI(サイドバータブ・コマンドパレット)はSolid.js製の別WebViewとして
 実装している。
 
-現状**macOS専用**。設計判断の詳細・技術選定の根拠・開発フェーズの記録は
+`wry`/`tao`自体はWindows/Linuxにも対応しているため原理上クロスプラットフォームだが、
+**開発・動作確認はmacOSのみ**で行っている(Windows/Linuxでのビルド・動作は未検証)。
+設計判断の詳細・技術選定の根拠・開発フェーズの記録は
 [`docs/architecture.md`](./docs/architecture.md) を参照。
 
-**現在ベータ版。** ビルド済み`.app`は [Releases](https://github.com/noir-chat-9661/rab-browser/releases)
-から入手できる。ad-hoc署名のみのため、初回起動時はGatekeeperの警告が出る
+**現在ベータ版。** ビルド済み`.app`(macOS向け)は
+[Releases](https://github.com/noir-chat-9661/rab-browser/releases) から入手できる。
+ad-hoc署名のみのため、初回起動時はGatekeeperの警告が出る
 (右クリック→「開く」で許可するか、`xattr -d com.apple.quarantine rab-browser.app` で
 quarantine属性を削除する)。
 
 ## 使い方
 
-前提: macOS、Rust(edition 2024)、[pnpm](https://pnpm.io/)。
+前提: Rust(edition 2024)、[pnpm](https://pnpm.io/)。動作確認はmacOSのみ。
 
 ```bash
 # ブラウザ本体を起動(引数で初期URLを指定可能)。crates/browser-app/build.rs が
@@ -33,7 +36,8 @@ cargo run -p browser-app -- https://example.com
 ./scripts/build-app.sh
 ```
 
-`target/release/rab-browser.app` が生成される(Finderからダブルクリック起動可能)。
+`target/release/rab-browser.app`(Finderからダブルクリック起動可能)と、配布用の
+`target/release/rab-browser-<version>.dmg` が生成される。
 ad-hoc署名(`codesign --sign -`)のみを行っており、配布用のDeveloper ID署名・
 notarizationは未対応。ローカルでの動作確認用(パスキー/WebAuthn関連の検証など)に使う。
 
