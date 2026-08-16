@@ -12,3 +12,6 @@ dist/
 
 # OS
 .DS_Store
+
+# Command Code (multi-model-orchestration handoff artifacts)
+/.commandcode/
