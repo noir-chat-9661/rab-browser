@@ -188,6 +188,10 @@ Codexのサンドボックスにはディスプレイセッションがなく上
 - **Phase 2**: タブ / Zen・Arc風UI — 完了
 - **Phase 3**: MCP機能拡張基盤 — 完了
 - **Phase 4**: Zen/Arc体験の拡充(Spaces/Workspaces等) — 未着手
+- **Windows対応**: `cargo build`/`cargo test`はCI(windows-latest)で確認済み。
+  ネイティブメニューバー( [#95](https://github.com/noir-chat-9661/rab-browser/issues/95) )・
+  JSダイアログ( [#96](https://github.com/noir-chat-9661/rab-browser/issues/96) )の実機動作は
+  未検証。Linuxは未着手
 - 既知の未解決事項: パスキー(WebAuthn)がWKWebView上で失敗する問題
   ( [#9](https://github.com/noir-chat-9661/rab-browser/issues/9) )。署名済み`.app`
   バンドル化が必要な可能性が高く、後回しにしている
