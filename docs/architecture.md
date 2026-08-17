@@ -191,7 +191,11 @@ Codexのサンドボックスにはディスプレイセッションがなく上
 - **Windows対応**: `cargo build`/`cargo test`はCI(windows-latest)で確認済み。
   ネイティブメニューバー( [#95](https://github.com/noir-chat-9661/rab-browser/issues/95) )・
   JSダイアログ( [#96](https://github.com/noir-chat-9661/rab-browser/issues/96) )の実機動作は
-  未検証。Linuxは未着手
+  未検証
+- **Linux対応**: `cargo build`/`cargo test`はCI(ubuntu-latest、webkit2gtk使用)で確認済み。
+  ネイティブメニューバー( [#99](https://github.com/noir-chat-9661/rab-browser/issues/99) )・
+  JSダイアログ( [#100](https://github.com/noir-chat-9661/rab-browser/issues/100) )の実機動作は
+  未検証
 - 既知の未解決事項: パスキー(WebAuthn)がWKWebView上で失敗する問題
   ( [#9](https://github.com/noir-chat-9661/rab-browser/issues/9) )。署名済み`.app`
   バンドル化が必要な可能性が高く、後回しにしている

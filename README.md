@@ -7,10 +7,12 @@
 `wry`/`tao`で直接制御し、UI(サイドバータブ・コマンドパレット)はSolid.js製の別WebViewとして
 実装している。
 
-**フル機能で動作確認しているのはmacOSのみ。** Windowsは`cargo build`/`cargo test`が
+**フル機能で動作確認しているのはmacOSのみ。** Windows/Linuxは`cargo build`/`cargo test`が
 CIで通ることは確認しているが、ネイティブメニューバー・JSダイアログ(alert/confirm/prompt)
-など一部機能は未検証( [#95](https://github.com/noir-chat-9661/rab-browser/issues/95) ,
-[#96](https://github.com/noir-chat-9661/rab-browser/issues/96) )。Linuxは未検証。
+など一部機能は実機未検証( Windows: [#95](https://github.com/noir-chat-9661/rab-browser/issues/95) ,
+[#96](https://github.com/noir-chat-9661/rab-browser/issues/96) / Linux:
+[#99](https://github.com/noir-chat-9661/rab-browser/issues/99) ,
+[#100](https://github.com/noir-chat-9661/rab-browser/issues/100) )。
 設計判断の詳細・技術選定の根拠・開発フェーズの記録は
 [`docs/architecture.md`](./docs/architecture.md) を参照。
 
@@ -24,7 +26,9 @@ Gatekeeperの警告が出る(右クリック→「開く」で許可するか、
 
 ## 使い方
 
-前提: Rust(edition 2024)、[pnpm](https://pnpm.io/)。フル機能の動作確認はmacOSのみ。
+前提: Rust(edition 2024)、[pnpm](https://pnpm.io/)。Linuxではwebkit2gtkの開発パッケージ
+(`libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, `libjavascriptcoregtk-4.1-dev`, `libsoup-3.0-dev`)
+が別途必要。フル機能の動作確認はmacOSのみ。
 
 ```bash
 # ブラウザ本体を起動(引数で初期URLを指定可能)。crates/browser-app/build.rs が
