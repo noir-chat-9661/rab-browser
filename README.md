@@ -12,11 +12,13 @@
 設計判断の詳細・技術選定の根拠・開発フェーズの記録は
 [`docs/architecture.md`](./docs/architecture.md) を参照。
 
-**現在ベータ版。** ビルド済み`.app`(macOS向け)は
+![rab-browserのプレビュー](./docs/images/preview.png)
+
+**現在ベータ版。** ビルド済み`.app`/`.dmg`(macOS向け)は
 [Releases](https://github.com/noir-chat-9661/rab-browser/releases) から入手できる。
-ad-hoc署名のみのため、初回起動時はGatekeeperの警告が出る
-(右クリック→「開く」で許可するか、`xattr -d com.apple.quarantine rab-browser.app` で
-quarantine属性を削除する)。
+**Developer ID署名・notarizationを行っていない(ad-hoc署名のみ)** ため、初回起動時は
+Gatekeeperの警告が出る(右クリック→「開く」で許可するか、
+`xattr -d com.apple.quarantine rab-browser.app` でquarantine属性を削除する)。
 
 ## 使い方
 
@@ -36,10 +38,9 @@ cargo run -p browser-app -- https://example.com
 ./scripts/build-app.sh
 ```
 
-`target/release/rab-browser.app`(Finderからダブルクリック起動可能)と、配布用の
-`target/release/rab-browser-<version>.dmg` が生成される。
-ad-hoc署名(`codesign --sign -`)のみを行っており、配布用のDeveloper ID署名・
-notarizationは未対応。ローカルでの動作確認用(パスキー/WebAuthn関連の検証など)に使う。
+`target/release/rab-browser.app`と`target/release/rab-browser-<version>.dmg`が生成される
+(署名についてはRelease配布時と同じ注意点)。ローカルでの動作確認用
+(パスキー/WebAuthn関連の検証など)に使う。
 
 ### 主なキーボードショートカット
 
