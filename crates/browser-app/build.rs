@@ -34,6 +34,7 @@ fn main() {
     );
 
     if !base_ui_dir.exists() {
+        ensure_placeholder(&base_ui_dir);
         return;
     }
 
@@ -43,6 +44,7 @@ fn main() {
              Run `pnpm --dir base-ui install && pnpm --dir base-ui build` manually, \
              or the chrome UI will be stale/missing."
         );
+        ensure_placeholder(&base_ui_dir);
         return;
     }
 
@@ -54,6 +56,37 @@ fn main() {
     run(&["install", "--frozen-lockfile"], &base_ui_dir, "install");
 
     run(&["run", "build"], &base_ui_dir, "build");
+
+    // include_str!(base-ui/dist/index.html) needs a file to exist at compile
+    // time regardless of whether the pnpm build above actually succeeded.
+    ensure_placeholder(&base_ui_dir);
+}
+
+/// Writes a minimal fallback `dist/index.html` if none exists yet, so
+/// `include_str!` in main.rs always has something to embed. Never overwrites
+/// a real (or even stale) build output.
+fn ensure_placeholder(base_ui_dir: &Path) {
+    let dist_dir = base_ui_dir.join("dist");
+    let index_path = dist_dir.join("index.html");
+    if index_path.exists() {
+        return;
+    }
+    if let Err(error) = std::fs::create_dir_all(&dist_dir) {
+        println!(
+            "cargo:warning=failed to create {}: {error}",
+            dist_dir.display()
+        );
+        return;
+    }
+    let placeholder = "<!doctype html><body style=\"margin:0;background:#171816;color:#e9e9e3;\
+         font:14px sans-serif;padding:24px\">base-ui is not built.<br><br>\
+         Run <code>pnpm --dir base-ui install && pnpm --dir base-ui build</code>.</body>";
+    if let Err(error) = std::fs::write(&index_path, placeholder) {
+        println!(
+            "cargo:warning=failed to write {}: {error}",
+            index_path.display()
+        );
+    }
 }
 
 fn which_pnpm() -> Result<(), ()> {

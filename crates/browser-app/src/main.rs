@@ -280,19 +280,16 @@ fn current_tab_is_new(tabs: &TabManager) -> bool {
         .is_some_and(|tab| is_new_tab_url(&tab.url))
 }
 
-fn chrome_html(theme: Theme) -> String {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../base-ui/dist/index.html");
-    fs::read_to_string(path).unwrap_or_else(|_| {
-        let (background, color) = match theme {
-            Theme::Dark => ("#171816", "#e9e9e3"),
-            Theme::Light => ("#f3f2eb", "#292a25"),
-        };
-        format!(
-            "<!doctype html><body style=\"margin:0;background:{background};color:{color};font:14px sans-serif;padding:24px\">\
-             base-ui is not built.<br><br>Run <code>pnpm --dir base-ui build</code>.</body>"
-        )
-    })
-}
+// Embedded at compile time (not read from disk at runtime): base-ui/dist is a
+// build artifact that only exists on the machine that ran `cargo build`, so a
+// runtime path read broke distributed release binaries (they'd only find the
+// file on the original builder's machine). build.rs guarantees this file
+// exists (writing a fallback placeholder if pnpm/the build failed) so
+// include_str! always has something to embed.
+const CHROME_HTML: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../base-ui/dist/index.html"
+));
 
 fn internal_page_response(request: Request<Vec<u8>>, theme: Theme) -> Response<Vec<u8>> {
     let uri = request.uri();
@@ -1608,7 +1605,7 @@ fn main() -> wry::Result<()> {
 
     let chrome_commands_tx = commands_tx.clone();
     let chrome = WebViewBuilder::new()
-        .with_html(chrome_html(settings.theme))
+        .with_html(CHROME_HTML)
         .with_transparent(true)
         .with_devtools(true)
         .with_ipc_handler(move |request: Request<String>| {
