@@ -2308,7 +2308,7 @@ fn main() -> wry::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        NEW_TAB_URL, TabHistory, eval_result, internal_page_response, is_only_new_tab,
+        CHROME_HTML, NEW_TAB_URL, TabHistory, eval_result, internal_page_response, is_only_new_tab,
         merge_codex_mcp_config, merge_mcp_client_config, merge_opencode_mcp_config,
         merge_zed_mcp_config, normalize_url, parse_startup_args, register_mcp_clients,
         restart_tab_suspend_grace, tab_suspend_deadline,
@@ -2891,5 +2891,11 @@ args = ["--serve"]
             eval_result(r#"{"ok":false,"error":"element not found"}"#.to_owned()),
             Err("element not found".to_owned())
         );
+    }
+
+    #[test]
+    fn chrome_html_is_embedded_and_not_empty() {
+        assert!(!CHROME_HTML.is_empty());
+        assert!(CHROME_HTML.contains("<!doctype html>"));
     }
 }

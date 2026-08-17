@@ -64,29 +64,23 @@ fn main() {
 
 /// Writes a minimal fallback `dist/index.html` if none exists yet, so
 /// `include_str!` in main.rs always has something to embed. Never overwrites
-/// a real (or even stale) build output.
+/// a real (or even stale) build output. Panics on failure instead of just
+/// warning: silently leaving no file behind would otherwise surface as a
+/// confusing `include_str!` "file not found" compile error in main.rs with
+/// no indication of the real (permissions/disk) cause.
 fn ensure_placeholder(base_ui_dir: &Path) {
     let dist_dir = base_ui_dir.join("dist");
     let index_path = dist_dir.join("index.html");
     if index_path.exists() {
         return;
     }
-    if let Err(error) = std::fs::create_dir_all(&dist_dir) {
-        println!(
-            "cargo:warning=failed to create {}: {error}",
-            dist_dir.display()
-        );
-        return;
-    }
+    std::fs::create_dir_all(&dist_dir)
+        .unwrap_or_else(|error| panic!("failed to create {}: {error}", dist_dir.display()));
     let placeholder = "<!doctype html><body style=\"margin:0;background:#171816;color:#e9e9e3;\
          font:14px sans-serif;padding:24px\">base-ui is not built.<br><br>\
          Run <code>pnpm --dir base-ui install && pnpm --dir base-ui build</code>.</body>";
-    if let Err(error) = std::fs::write(&index_path, placeholder) {
-        println!(
-            "cargo:warning=failed to write {}: {error}",
-            index_path.display()
-        );
-    }
+    std::fs::write(&index_path, placeholder)
+        .unwrap_or_else(|error| panic!("failed to write {}: {error}", index_path.display()));
 }
 
 fn which_pnpm() -> Result<(), ()> {
