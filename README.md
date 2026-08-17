@@ -39,8 +39,8 @@ cargo run -p browser-app -- https://example.com
 ```
 
 `target/release/rab-browser.app`と`target/release/rab-browser-<version>.dmg`が生成される
-(署名についてはRelease配布時と同じ注意点)。ローカルでの動作確認用
-(パスキー/WebAuthn関連の検証など)に使う。
+(署名についてはRelease配布時と同じ注意点)。[Releases](https://github.com/noir-chat-9661/rab-browser/releases)
+のベータ版を待たずに最新のmainを試したい場合や、コントリビュート時の動作確認に使う。
 
 ### 主なキーボードショートカット
 
