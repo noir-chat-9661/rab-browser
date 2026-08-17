@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to attach build artifacts to (e.g. v0.1.0-beta.1)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: Build macOS .app/.dmg
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          package_json_file: base-ui/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: base-ui/pnpm-lock.yaml
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: ./scripts/build-app.sh
+      - run: |
+          version="$(sed -n '/^version = /{s/^version = "\(.*\)"/\1/p;q;}' crates/browser-app/Cargo.toml)"
+          ditto -c -k --sequesterRsrc --keepParent target/release/rab-browser.app \
+            "rab-browser-${{ inputs.tag }}-macos.zip"
+          mv "target/release/rab-browser-${version}.dmg" "rab-browser-${{ inputs.tag }}.dmg"
+      - run: |
+          gh release upload "${{ inputs.tag }}" \
+            "rab-browser-${{ inputs.tag }}-macos.zip" \
+            "rab-browser-${{ inputs.tag }}.dmg" \
+            --clobber --repo "${{ github.repository }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  windows:
+    name: Build Windows .zip
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          package_json_file: base-ui/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: base-ui/pnpm-lock.yaml
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo build --release -p browser-app
+      - run: |
+          Compress-Archive -Path target/release/browser-app.exe `
+            -DestinationPath "rab-browser-${{ inputs.tag }}-windows.zip"
+        shell: pwsh
+      - run: |
+          gh release upload "${{ inputs.tag }}" `
+            "rab-browser-${{ inputs.tag }}-windows.zip" `
+            --clobber --repo "${{ github.repository }}"
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  linux:
+    name: Build Linux .tar.gz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          package_json_file: base-ui/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: base-ui/pnpm-lock.yaml
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev
+      - run: cargo build --release -p browser-app
+      - run: |
+          tar -czf "rab-browser-${{ inputs.tag }}-linux-x86_64.tar.gz" \
+            -C target/release browser-app
+      - run: |
+          gh release upload "${{ inputs.tag }}" \
+            "rab-browser-${{ inputs.tag }}-linux-x86_64.tar.gz" \
+            --clobber --repo "${{ github.repository }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
