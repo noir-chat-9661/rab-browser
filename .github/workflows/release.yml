@@ -49,11 +49,12 @@ jobs:
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           package_json_file: base-ui/package.json
+      # No cache: pnpm here — build.rs is the only pnpm caller (via PATH), so
+      # by the time setup-node's post-job cache-save runs there's no store
+      # for it to find, and it fails the job with a path-validation error.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: base-ui/pnpm-lock.yaml
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo build --release -p browser-app
       - run: |
@@ -77,11 +78,10 @@ jobs:
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           package_json_file: base-ui/package.json
+      # No cache: pnpm here — see the windows job's comment on the same setup-node step.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: base-ui/pnpm-lock.yaml
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: |
           sudo apt-get update
