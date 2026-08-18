@@ -18,11 +18,13 @@ CIで通ることは確認しているが、ネイティブメニューバー・
 
 ![rab-browserのプレビュー](./docs/images/preview.png)
 
-**現在ベータ版。** ビルド済み`.app`/`.dmg`(macOS向け)は
-[Releases](https://github.com/noir-chat-9661/rab-browser/releases) から入手できる。
-**Developer ID署名・notarizationを行っていない(ad-hoc署名のみ)** ため、初回起動時は
-Gatekeeperの警告が出る(右クリック→「開く」で許可するか、
-`xattr -d com.apple.quarantine rab-browser.app` でquarantine属性を削除する)。
+**現在ベータ版。** ビルド済みバイナリ(macOS: `.dmg` / Windows: `.exe` / Linux:
+`.AppImage`)は[Releases](https://github.com/noir-chat-9661/rab-browser/releases)
+から入手できる。**いずれも未署名**(macOSはad-hoc署名のみでDeveloper ID署名・
+notarization未対応、Windowsはコード署名未対応)なため、初回起動時に警告が出る
+(macOS: 右クリック→「開く」で許可するか`xattr -d com.apple.quarantine
+rab-browser.app`でquarantine属性を削除。Windows: SmartScreenの警告。Linux:
+`chmod +x`で実行権限を付与してから起動)。
 
 ## 使い方
 
