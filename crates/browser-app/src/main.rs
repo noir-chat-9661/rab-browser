@@ -1061,13 +1061,22 @@ fn mcp_client_config_path(home: &Path, client: &str) -> Option<PathBuf> {
     }
 }
 
-fn merge_mcp_client_config(path: &Path, executable: &Path) -> io::Result<()> {
-    let mut config = match fs::read_to_string(path) {
+/// Reads and parses `path` as a JSON object, treating a missing file or a
+/// file containing only whitespace as an empty `{}` (some MCP clients, e.g.
+/// Antigravity's `~/.gemini/config/mcp_config.json`, ship an empty
+/// placeholder file that isn't valid JSON on its own).
+fn read_json_config(path: &Path) -> io::Result<serde_json::Value> {
+    match fs::read_to_string(path) {
+        Ok(contents) if contents.trim().is_empty() => Ok(serde_json::json!({})),
         Ok(contents) => serde_json::from_str::<serde_json::Value>(&contents)
-            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?,
-        Err(error) if error.kind() == ErrorKind::NotFound => serde_json::json!({}),
-        Err(error) => return Err(error),
-    };
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(serde_json::json!({})),
+        Err(error) => Err(error),
+    }
+}
+
+fn merge_mcp_client_config(path: &Path, executable: &Path) -> io::Result<()> {
+    let mut config = read_json_config(path)?;
     let config_object = config.as_object_mut().ok_or_else(|| {
         io::Error::new(
             ErrorKind::InvalidData,
@@ -1099,12 +1108,7 @@ fn merge_mcp_client_config(path: &Path, executable: &Path) -> io::Result<()> {
 }
 
 fn merge_zed_mcp_config(path: &Path, executable: &Path) -> io::Result<()> {
-    let mut config = match fs::read_to_string(path) {
-        Ok(contents) => serde_json::from_str::<serde_json::Value>(&contents)
-            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?,
-        Err(error) if error.kind() == ErrorKind::NotFound => serde_json::json!({}),
-        Err(error) => return Err(error),
-    };
+    let mut config = read_json_config(path)?;
     let config_object = config.as_object_mut().ok_or_else(|| {
         io::Error::new(
             ErrorKind::InvalidData,
@@ -1181,12 +1185,7 @@ fn merge_codex_mcp_config(path: &Path, executable: &Path) -> io::Result<()> {
 }
 
 fn merge_opencode_mcp_config(path: &Path, executable: &Path) -> io::Result<()> {
-    let mut config = match fs::read_to_string(path) {
-        Ok(contents) => serde_json::from_str::<serde_json::Value>(&contents)
-            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?,
-        Err(error) if error.kind() == ErrorKind::NotFound => serde_json::json!({}),
-        Err(error) => return Err(error),
-    };
+    let mut config = read_json_config(path)?;
     let config_object = config.as_object_mut().ok_or_else(|| {
         io::Error::new(
             ErrorKind::InvalidData,
@@ -2495,6 +2494,31 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn treats_empty_antigravity_config_file_as_empty_object() {
+        // Antigravity ships ~/.gemini/config/mcp_config.json as a 0-byte
+        // placeholder on some installs; that isn't valid JSON on its own and
+        // used to fail registration with a confusing serde_json EOF error.
+        let home = TestDir::new();
+        let path = home.0.join(".gemini/config/mcp_config.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "").unwrap();
+        let clients = ["antigravity".to_owned()];
+
+        let result =
+            register_mcp_clients(&home.0, std::path::Path::new("/opt/rab-browser"), &clients);
+
+        assert_eq!(result.registered, clients);
+        assert!(result.errors.is_empty());
+        assert_eq!(
+            read_json(&path)["mcpServers"]["rab-browser"],
+            serde_json::json!({
+                "command": "/opt/rab-browser",
+                "args": ["--mcp"]
+            })
+        );
     }
 
     #[test]
