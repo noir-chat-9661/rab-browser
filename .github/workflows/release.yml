@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   macos:
-    name: Build macOS .app/.dmg
+    name: Build macOS .dmg
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -29,19 +29,16 @@ jobs:
       - run: ./scripts/build-app.sh
       - run: |
           version="$(sed -n '/^version = /{s/^version = "\(.*\)"/\1/p;q;}' crates/browser-app/Cargo.toml)"
-          ditto -c -k --sequesterRsrc --keepParent target/release/rab-browser.app \
-            "rab-browser-${{ inputs.tag }}-macos.zip"
           mv "target/release/rab-browser-${version}.dmg" "rab-browser-${{ inputs.tag }}.dmg"
       - run: |
           gh release upload "${{ inputs.tag }}" \
-            "rab-browser-${{ inputs.tag }}-macos.zip" \
             "rab-browser-${{ inputs.tag }}.dmg" \
             --clobber --repo "${{ github.repository }}"
         env:
           GH_TOKEN: ${{ github.token }}
 
   windows:
-    name: Build Windows .zip
+    name: Build Windows .exe
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -58,19 +55,18 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo build --release -p browser-app
       - run: |
-          Compress-Archive -Path target/release/browser-app.exe `
-            -DestinationPath "rab-browser-${{ inputs.tag }}-windows.zip"
+          Copy-Item target/release/browser-app.exe "rab-browser-${{ inputs.tag }}.exe"
         shell: pwsh
       - run: |
           gh release upload "${{ inputs.tag }}" `
-            "rab-browser-${{ inputs.tag }}-windows.zip" `
+            "rab-browser-${{ inputs.tag }}.exe" `
             --clobber --repo "${{ github.repository }}"
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
 
   linux:
-    name: Build Linux .tar.gz
+    name: Build Linux .AppImage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -85,14 +81,40 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev imagemagick
       - run: cargo build --release -p browser-app
+      - name: Assemble AppDir
+        run: |
+          set -euo pipefail
+          mkdir -p AppDir/usr/bin
+          cp target/release/browser-app AppDir/usr/bin/rab-browser
+          # No app icon has been designed yet (tracked separately); a plain
+          # placeholder is required because appimagetool refuses to build
+          # without one. Swap for a real .png once an icon exists.
+          convert -size 256x256 xc:'#171816' AppDir/rab-browser.png
+          printf '%s\n' \
+            '[Desktop Entry]' \
+            'Type=Application' \
+            'Name=rab-browser' \
+            'Exec=rab-browser' \
+            'Icon=rab-browser' \
+            'Categories=Network;WebBrowser;' \
+            > AppDir/rab-browser.desktop
+          printf '%s\n' \
+            '#!/bin/sh' \
+            'HERE="$(dirname "$(readlink -f "$0")")"' \
+            'exec "$HERE/usr/bin/rab-browser" "$@"' \
+            > AppDir/AppRun
+          chmod +x AppDir/AppRun
       - run: |
-          tar -czf "rab-browser-${{ inputs.tag }}-linux-x86_64.tar.gz" \
-            -C target/release browser-app
+          curl -fsSL -o appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          ./appimagetool --appimage-extract-and-run AppDir \
+            "rab-browser-${{ inputs.tag }}-x86_64.AppImage"
       - run: |
           gh release upload "${{ inputs.tag }}" \
-            "rab-browser-${{ inputs.tag }}-linux-x86_64.tar.gz" \
+            "rab-browser-${{ inputs.tag }}-x86_64.AppImage" \
             --clobber --repo "${{ github.repository }}"
         env:
           GH_TOKEN: ${{ github.token }}
