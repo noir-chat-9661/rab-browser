@@ -3,7 +3,11 @@
 //! just because someone forgot to run `pnpm --dir base-ui build` by hand
 //! after pulling changes that touch base-ui.
 
-use std::{path::Path, process::Command};
+use std::{env, path::Path, process::Command};
+
+fn env_flag_set(name: &str) -> bool {
+    env::var(name).is_ok_and(|value| !value.is_empty())
+}
 
 fn main() {
     let base_ui_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../base-ui");
@@ -39,6 +43,16 @@ fn main() {
     }
 
     if which_pnpm().is_err() {
+        // RAB_REQUIRE_BASE_UI is set by CI release builds: a placeholder
+        // silently shipping in a release binary is much worse than a build
+        // failure, and this exact silent fallback already shipped a broken
+        // UI to v0.1.0-beta.1/beta.2's Windows binaries undetected.
+        if env_flag_set("RAB_REQUIRE_BASE_UI") {
+            panic!(
+                "pnpm not found on PATH and RAB_REQUIRE_BASE_UI is set; \
+                 refusing to ship a placeholder chrome UI"
+            );
+        }
         println!(
             "cargo:warning=pnpm not found on PATH; skipping automatic base-ui build. \
              Run `pnpm --dir base-ui install && pnpm --dir base-ui build` manually, \
@@ -83,8 +97,17 @@ fn ensure_placeholder(base_ui_dir: &Path) {
         .unwrap_or_else(|error| panic!("failed to write {}: {error}", index_path.display()));
 }
 
+// On Windows, pnpm installs as a `pnpm.cmd`/`pnpm.ps1` shim, not `pnpm.exe`.
+// `std::process::Command` invokes `CreateProcess` directly and does not do
+// the PATHEXT resolution a shell would, so `Command::new("pnpm")` silently
+// fails to find it there even when it's genuinely on PATH — build.rs would
+// then skip the base-ui build without any indication beyond a warning, and
+// the compiled-in placeholder HTML ("base-ui is not built") would ship in
+// release binaries.
+const PNPM_BIN: &str = if cfg!(windows) { "pnpm.cmd" } else { "pnpm" };
+
 fn which_pnpm() -> Result<(), ()> {
-    Command::new("pnpm")
+    Command::new(PNPM_BIN)
         .arg("--version")
         .output()
         .map(|_| ())
@@ -95,7 +118,7 @@ fn run(args: &[&str], dir: &Path, label: &str) {
     // build.rs always runs non-interactively (no TTY). Without CI=1, pnpm's
     // "confirm modules purge" prompt has nothing to answer and pnpm aborts
     // instead: https://github.com/pnpm/pnpm/issues (ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY).
-    match Command::new("pnpm")
+    match Command::new(PNPM_BIN)
         .args(args)
         .current_dir(dir)
         .env("CI", "1")
