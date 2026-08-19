@@ -1,11 +1,9 @@
 use std::{
-    cell::Cell,
     collections::BTreeMap,
     env, fs,
     io::{self, ErrorKind},
     net::{Ipv4Addr, TcpListener},
     path::{Path, PathBuf},
-    rc::Rc,
     sync::{
         Arc, Mutex,
         mpsc::{self, Sender},
@@ -530,19 +528,19 @@ fn create_content_view(
     sidebar_visible: bool,
     events_tx: &Sender<ContentEvent>,
     commands_tx: &Sender<String>,
-    theme: &Rc<Cell<Theme>>,
+    theme: &Arc<Mutex<Theme>>,
 ) -> wry::Result<WryEngine> {
     let title_tx = events_tx.clone();
     let load_tx = events_tx.clone();
     let ipc_events_tx = events_tx.clone();
     let content_commands_tx = commands_tx.clone();
-    let internal_page_theme = Rc::clone(theme);
+    let internal_page_theme = Arc::clone(theme);
     let bounds = content_bounds(window, sidebar_visible);
     let view = WryEngine::new_with_handlers_and_bounds_and_protocol(
         window,
         url,
         Some(bounds),
-        theme.get(),
+        *theme.lock().unwrap(),
         move |title| {
             let _ = title_tx.send(ContentEvent::TitleChanged { id, title });
         },
@@ -566,7 +564,10 @@ fn create_content_view(
             }
         },
         INTERNAL_PROTOCOL,
-        move |request| internal_page_response(request, internal_page_theme.get()),
+        move |request| {
+            let theme = *internal_page_theme.lock().unwrap();
+            internal_page_response(request, theme)
+        },
     )?;
     // Keep this as a post-build correction too: the window scale or size may
     // have changed while WKWebView was being initialized.
@@ -605,7 +606,7 @@ fn ensure_content_view(
     views: &mut BTreeMap<TabId, WryEngine>,
     events_tx: &Sender<ContentEvent>,
     commands_tx: &Sender<String>,
-    theme: &Rc<Cell<Theme>>,
+    theme: &Arc<Mutex<Theme>>,
     sidebar_visible: bool,
     last_active: &mut BTreeMap<TabId, Instant>,
     id: TabId,
@@ -646,7 +647,7 @@ fn select_content_view(
     views: &mut BTreeMap<TabId, WryEngine>,
     events_tx: &Sender<ContentEvent>,
     commands_tx: &Sender<String>,
-    theme: &Rc<Cell<Theme>>,
+    theme: &Arc<Mutex<Theme>>,
     sidebar_visible: bool,
     last_active: &mut BTreeMap<TabId, Instant>,
     previous: Option<TabId>,
@@ -852,7 +853,7 @@ fn add_tab(
     histories: &mut BTreeMap<TabId, TabHistory>,
     events_tx: &Sender<ContentEvent>,
     commands_tx: &Sender<String>,
-    theme: &Rc<Cell<Theme>>,
+    theme: &Arc<Mutex<Theme>>,
     last_active: &mut BTreeMap<TabId, Instant>,
     url: &str,
     sidebar_visible: bool,
@@ -902,7 +903,7 @@ fn close_tab(
     histories: &mut BTreeMap<TabId, TabHistory>,
     events_tx: &Sender<ContentEvent>,
     commands_tx: &Sender<String>,
-    theme: &Rc<Cell<Theme>>,
+    theme: &Arc<Mutex<Theme>>,
     last_active: &mut BTreeMap<TabId, Instant>,
     playing_media: &mut BTreeMap<TabId, bool>,
     id: TabId,
@@ -1293,7 +1294,7 @@ fn handle_mcp_request(
     playing_media: &mut BTreeMap<TabId, bool>,
     content_events_tx: &Sender<ContentEvent>,
     commands_tx: &Sender<String>,
-    theme: &Rc<Cell<Theme>>,
+    theme: &Arc<Mutex<Theme>>,
     sidebar_visible: bool,
     mcp_enabled: bool,
     mcp_http_state: &McpHttpState,
@@ -1582,7 +1583,7 @@ fn main() -> wry::Result<()> {
     let mut bookmarks = BookmarkManager::new();
     let mut history = HistoryManager::new();
     let mut settings = AppSettings::default();
-    let current_theme = Rc::new(Cell::new(settings.theme));
+    let current_theme = Arc::new(Mutex::new(settings.theme));
     let mut views = BTreeMap::new();
     let mut histories = BTreeMap::new();
     let mut last_active = BTreeMap::new();
@@ -1959,7 +1960,7 @@ fn main() -> wry::Result<()> {
                         ChromeCommand::SetTheme { theme } => {
                             if let Ok(theme) = theme.parse::<Theme>() {
                                 settings.theme = theme;
-                                current_theme.set(theme);
+                                *current_theme.lock().unwrap() = theme;
                                 for (id, view) in views.iter_mut() {
                                     view.apply_theme(theme);
                                     // The newtab page's colors are baked into
