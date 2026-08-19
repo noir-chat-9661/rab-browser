@@ -12,7 +12,8 @@
     "noEmit": true,
     "jsx": "preserve",
     "jsxImportSource": "solid-js",
-    "strict": true
+    "strict": true,
+    "types": ["vite/client"]
   },
   "include": ["src"]
 }
