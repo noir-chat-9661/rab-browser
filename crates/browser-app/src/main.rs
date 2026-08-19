@@ -1,3 +1,11 @@
+// Without this, Windows launches every run (including a normal double-click)
+// as a console-subsystem process, popping up a terminal window alongside the
+// browser GUI. This has no effect on macOS/Linux. stdio still works when a
+// parent process spawns us with piped handles (e.g. an MCP client using
+// `--mcp`); a GUI-subsystem process just doesn't get an auto-allocated
+// console when launched with no stdio of its own.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use std::{
     collections::BTreeMap,
     env, fs,
