@@ -6,5 +6,5 @@ publish = false
 
 [dependencies]
 tao = "0.36.0"
-wry = "0.55.1"
+wry = "0.56.1"
 

@@ -196,7 +196,7 @@ type InstallJsDialogDelegateResult = Option<objc2::rc::Retained<RabUIDelegate>>;
 #[cfg(not(target_os = "macos"))]
 type InstallJsDialogDelegateResult = ();
 
-type CustomProtocolHandler = Box<dyn Fn(Request<Vec<u8>>) -> Response<Vec<u8>>>;
+type CustomProtocolHandler = Box<dyn Fn(Request<Vec<u8>>) -> Response<Vec<u8>> + Send + Sync>;
 
 impl WryEngine {
     pub fn new(window: &Window, url: &str, theme: Theme) -> Result<Self, wry::Error> {
@@ -253,7 +253,7 @@ impl WryEngine {
         on_page_load: impl Fn(PageLoadEvent, String) + 'static,
         on_ipc: impl Fn(Request<String>) + 'static,
         protocol_name: &str,
-        protocol_handler: impl Fn(Request<Vec<u8>>) -> Response<Vec<u8>> + 'static,
+        protocol_handler: impl Fn(Request<Vec<u8>>) -> Response<Vec<u8>> + Send + Sync + 'static,
     ) -> Result<Self, wry::Error> {
         Self::build(
             window,
