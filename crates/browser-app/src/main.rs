@@ -564,7 +564,10 @@ fn create_content_view(
             }
         },
         INTERNAL_PROTOCOL,
-        move |request| internal_page_response(request, *internal_page_theme.lock().unwrap()),
+        move |request| {
+            let theme = *internal_page_theme.lock().unwrap();
+            internal_page_response(request, theme)
+        },
     )?;
     // Keep this as a post-build correction too: the window scale or size may
     // have changed while WKWebView was being initialized.
