@@ -10,6 +10,12 @@ on:
 permissions:
   contents: write
 
+env:
+  # Fail the build instead of silently embedding a placeholder chrome UI if
+  # pnpm can't be found (see build.rs) — a release binary must never ship
+  # with a broken UI undetected.
+  RAB_REQUIRE_BASE_UI: "1"
+
 jobs:
   macos:
     name: Build macOS .dmg
