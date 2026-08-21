@@ -69,6 +69,7 @@ enum ChromeCommand {
     Navigate { url: String },
     ContentUrlChanged { url: String },
     OpenLocation,
+    OpenNewTabPrompt,
     GoBack,
     GoForward,
     Reload,
@@ -1006,6 +1007,20 @@ fn focus_location(window: &Window, chrome: &WebView, palette_open: &mut bool) {
     bring_chrome_to_front(chrome);
     let _ = chrome.focus();
     let _ = chrome.evaluate_script("window.rabChrome?.openLocation();");
+}
+
+/// Same as `focus_location`, but opens the deferred "new tab" prompt: no tab
+/// is created until the user actually submits a destination (see
+/// `openNewTabPrompt` in base-ui). This is the native-level path for Cmd+T,
+/// used when the chrome WebView doesn't have focus to receive the keydown
+/// itself (e.g. focus is in a content tab).
+fn focus_new_tab_prompt(window: &Window, chrome: &WebView, palette_open: &mut bool) {
+    *palette_open = true;
+    let _ = chrome.set_visible(true);
+    let _ = chrome.set_bounds(full_window_bounds(window));
+    bring_chrome_to_front(chrome);
+    let _ = chrome.focus();
+    let _ = chrome.evaluate_script("window.rabChrome?.openNewTabPrompt();");
 }
 
 fn open_settings(window: &Window, chrome: &WebView, palette_open: &mut bool) {
@@ -1996,6 +2011,9 @@ fn main() -> wry::Result<()> {
                         ChromeCommand::OpenLocation => {
                             focus_location(&window, &chrome, &mut palette_open);
                         }
+                        ChromeCommand::OpenNewTabPrompt => {
+                            focus_new_tab_prompt(&window, &chrome, &mut palette_open);
+                        }
                         ChromeCommand::GoBack => {
                             if let Some(id) = tabs.current_id()
                                 && let Some(history) = histories.get_mut(&id)
@@ -2292,33 +2310,8 @@ fn main() -> wry::Result<()> {
                         KeyCode::KeyL => {
                             focus_location(&window, &chrome, &mut palette_open);
                         }
-                        KeyCode::KeyT
-                            if add_tab(
-                                &window,
-                                &mut tabs,
-                                &mut views,
-                                &mut histories,
-                                &content_events_tx,
-                                &commands_tx,
-                                &current_theme,
-                                &mut last_active,
-                                NEW_TAB_URL,
-                                sidebar_visible,
-                                settings.search_engine,
-                            )
-                            .is_ok() =>
-                        {
-                            send_state(
-                                &chrome,
-                                &tabs,
-                                &views,
-                                &bookmarks,
-                                &settings,
-                                mcp_enabled,
-                                &mcp_http_state,
-                            );
-                            bring_chrome_to_front(&chrome);
-                            focus_location(&window, &chrome, &mut palette_open);
+                        KeyCode::KeyT => {
+                            focus_new_tab_prompt(&window, &chrome, &mut palette_open);
                         }
                         KeyCode::KeyR => {
                             if !current_tab_is_new(&tabs)

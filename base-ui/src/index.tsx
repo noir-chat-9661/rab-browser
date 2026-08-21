@@ -75,6 +75,7 @@ type BrowserState = {
 type ChromeApi = {
   receive: (state: BrowserState) => void;
   openLocation: () => void;
+  openNewTabPrompt: () => void;
   openSettings: () => void;
   openMcpHelp: () => void;
 };
@@ -214,6 +215,12 @@ const mcpClients: McpClient[] = [
 function App() {
   const [state, setState] = createStore(emptyState);
   const [locationOpen, setLocationOpen] = createSignal(false);
+  // When the location bar was opened via "new tab" (button/Cmd+T) rather
+  // than to edit the current tab's URL: submitting creates a tab at the
+  // typed destination instead of navigating the current one, and
+  // cancelling creates nothing at all — no blank tab left behind to clean
+  // up if the user changes their mind.
+  const [newTabPending, setNewTabPending] = createSignal(false);
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [settingsCategory, setSettingsCategory] =
     createSignal<SettingsCategory>("language");
@@ -380,6 +387,19 @@ function App() {
     if (minutes !== null) send({ type: "set_tab_suspend_grace", secs: minutes * 60 });
   };
 
+  // Show the same deferred URL/search prompt on first launch, instead of a
+  // blank placeholder tab the user has to click into: the very first state
+  // broadcast (state.tabs.length starts at 0 before it) is a single blank
+  // tab whenever rab-browser was started without an initial URL.
+  let startupPromptDone = false;
+  createEffect(() => {
+    if (startupPromptDone || state.tabs.length === 0) return;
+    startupPromptDone = true;
+    if (state.tabs.length === 1 && isNewTabUrl(currentTab()?.url ?? "")) {
+      openNewTabPrompt();
+    }
+  });
+
   createEffect(() => {
     document.documentElement.dataset.theme = state.settings.theme;
     document.documentElement.lang =
@@ -415,11 +435,13 @@ function App() {
   const closeLocation = () => {
     if (!locationOpen()) return;
     setLocationOpen(false);
+    setNewTabPending(false);
     send({ type: "palette_closed" });
   };
 
   const openLocation = () => {
     setSettingsOpen(false);
+    setNewTabPending(false);
     setLocationValue(
       isNewTabUrl(currentTab()?.url ?? "") ? "" : currentTab()?.url ?? "",
     );
@@ -430,6 +452,21 @@ function App() {
     queueMicrotask(() => {
       locationInput?.focus();
       locationInput?.select();
+    });
+  };
+
+  // "New tab" (button/Cmd+T): opens the same location bar, but doesn't
+  // create a tab until the user actually submits a destination.
+  const openNewTabPrompt = () => {
+    setSettingsOpen(false);
+    setNewTabPending(true);
+    setLocationValue("");
+    if (!locationOpen()) {
+      setLocationOpen(true);
+      send({ type: "palette_opened" });
+    }
+    queueMicrotask(() => {
+      locationInput?.focus();
     });
   };
 
@@ -458,6 +495,17 @@ function App() {
   const navigate = () => {
     const url = locationValue().trim();
     if (!url) return;
+    if (newTabPending() && !isNewTabUrl(currentTab()?.url ?? "")) {
+      // The current tab already has real content, so a genuinely new tab
+      // is needed. If it's still blank (fresh launch, or Cmd+T pressed
+      // again on an already-blank tab), fall through to the plain
+      // navigate below instead — no need for a second blank tab when the
+      // current one hasn't been used for anything yet.
+      setNewTabPending(false);
+      send({ type: "new_tab", url });
+      closeLocation();
+      return;
+    }
     send({ type: "navigate", url });
     closeLocation();
   };
@@ -478,6 +526,7 @@ function App() {
     window.rabChrome = {
       receive: receiveState,
       openLocation,
+      openNewTabPrompt,
       openSettings,
       openMcpHelp,
     };
@@ -517,7 +566,7 @@ function App() {
       const key = event.key.toLowerCase();
       if (key === "t") {
         event.preventDefault();
-        send({ type: "new_tab" });
+        openNewTabPrompt();
       } else if (key === "l") {
         event.preventDefault();
         openLocation();
@@ -615,11 +664,7 @@ function App() {
             <span>{t().tabs}</span>
             <span>{state.tabs.length.toString().padStart(2, "0")}</span>
           </div>
-          <button
-            class="new-tab"
-            type="button"
-            onClick={() => send({ type: "new_tab" })}
-          >
+          <button class="new-tab" type="button" onClick={openNewTabPrompt}>
             <Plus />
             <span>{t().newTab}</span>
             <kbd>{shortcutLabel("T")}</kbd>
@@ -751,7 +796,9 @@ function App() {
             }}
             onClick={(event) => event.stopPropagation()}
           >
-            <label id="location-label" for="location">{t().navigate}</label>
+            <label id="location-label" for="location">
+              {newTabPending() ? t().newTabNavigate : t().navigate}
+            </label>
             <div
               class="command-input-wrap"
               classList={{ "search-mode": searchMode() }}
@@ -790,7 +837,9 @@ function App() {
               />
             </div>
             <div class="command-hint">
-              <span>{t().openInCurrentTab}</span>
+              <span>
+                {newTabPending() ? t().openInNewTab : t().openInCurrentTab}
+              </span>
               <kbd>↵</kbd>
             </div>
           </form>
