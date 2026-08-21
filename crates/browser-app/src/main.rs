@@ -1581,39 +1581,66 @@ fn try_bind_control_socket() -> Option<TcpListener> {
     Some(listener)
 }
 
+/// Connects to the control socket and performs the auth handshake: sends
+/// the token from [`browser_mcp_server::read_control_token`] and waits for
+/// an `OK` reply. The read is bounded in both size and time (a fixed small
+/// buffer plus a 5s read timeout) so a peer that accepts the connection but
+/// never answers — or answers without ever sending a newline — can't hang
+/// this process or make it buffer unbounded memory, mirroring the same
+/// bound the server side applies when reading the token
+/// (`spawn_control_socket`). Returns the two connected halves with the
+/// timeout cleared again on success, ready for the raw stdio relay.
+fn try_handshake() -> Option<(TcpStream, TcpStream)> {
+    let token = browser_mcp_server::read_control_token().ok()?;
+    let mut socket_read =
+        TcpStream::connect((Ipv4Addr::LOCALHOST, browser_mcp_server::CONTROL_PORT)).ok()?;
+    socket_read
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .ok()?;
+    let mut socket_write = socket_read.try_clone().ok()?;
+    use io::{Read, Write};
+    socket_write
+        .write_all(format!("{token}\n").as_bytes())
+        .ok()?;
+    let mut ack = [0u8; 8];
+    let read = socket_read.read(&mut ack).ok()?;
+    if String::from_utf8_lossy(&ack[..read]).trim_end() != "OK" {
+        return None;
+    }
+    // The relay below must block indefinitely (it's proxying a live MCP
+    // session, not a bounded handshake), so this timeout was only ever
+    // meant for the two reads above.
+    socket_read.set_read_timeout(None).ok()?;
+    Some((socket_read, socket_write))
+}
+
 /// Tries to relay this process's stdio to an already-running primary
 /// instance's control socket, so a second `--mcp` launch (e.g. a new MCP
 /// client session) attaches to the same browser instead of opening a
 /// duplicate window. Returns `true` once the primary side closes the
 /// connection (the caller should exit). Returns `false` without touching
-/// stdio if the peer on the control port doesn't present a valid
-/// rab-browser auth token — it might just be an unrelated process that
-/// happens to hold the port — so the caller can fall back to starting its
-/// own primary instance instead of trusting an unverified peer.
+/// stdio if no attempt authenticates — the port might be held by an
+/// unrelated local process, or (see the retry below) by a rab-browser
+/// primary that bound the port but hasn't finished starting up yet — so the
+/// caller can fall back to starting its own primary instance instead of
+/// trusting an unverified peer or giving up too early.
 fn relay_stdio_to_existing_instance() -> bool {
-    let Ok(token) = browser_mcp_server::read_control_token() else {
-        return false;
+    // A handful of short retries covers the brief window right after a
+    // fresh primary claims the control port but before it has written its
+    // token / started accepting connections (main() minimizes but can't
+    // fully eliminate this window, since GUI setup still happens between
+    // claiming the port and the control socket being spawned).
+    let mut attempt = 0;
+    let (mut socket_read, mut socket_write) = loop {
+        if let Some(streams) = try_handshake() {
+            break streams;
+        }
+        attempt += 1;
+        if attempt >= 5 {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(300));
     };
-    let Ok(socket_read) =
-        TcpStream::connect((Ipv4Addr::LOCALHOST, browser_mcp_server::CONTROL_PORT))
-    else {
-        return false;
-    };
-    let Ok(mut socket_write) = socket_read.try_clone() else {
-        return false;
-    };
-    use io::{BufRead, Write};
-    if socket_write
-        .write_all(format!("{token}\n").as_bytes())
-        .is_err()
-    {
-        return false;
-    }
-    let mut socket_read = io::BufReader::new(socket_read);
-    let mut ack = String::new();
-    if socket_read.read_line(&mut ack).is_err() || ack.trim_end() != "OK" {
-        return false;
-    }
     // Deliberately not joined: this thread blocks reading our own stdin,
     // which the parent MCP client may never close even after the primary
     // instance (and thus the socket side below) has gone away. Joining it
@@ -1623,6 +1650,7 @@ fn relay_stdio_to_existing_instance() -> bool {
         let _ = io::copy(&mut io::stdin(), &mut socket_write);
         let _ = socket_write.shutdown(std::net::Shutdown::Write);
     });
+    use io::Write;
     let _ = io::copy(&mut socket_read, &mut io::stdout());
     let _ = io::stdout().flush();
     true
@@ -1644,6 +1672,42 @@ fn main() -> wry::Result<()> {
     }
 
     let event_loop = EventLoopBuilder::<McpRequest>::with_user_event().build();
+
+    // Start the control socket as early as possible — right after the
+    // event loop exists (all `dispatcher` needs) and before the
+    // potentially slow window/WebView construction below — so the race
+    // window where a second `--mcp` launch sees the port bound but gets no
+    // answer (and wrongly falls back to opening its own window) stays as
+    // small as possible. See relay_stdio_to_existing_instance's bounded
+    // retry for the remainder of that window.
+    let dispatcher: Arc<dyn RequestDispatcher> =
+        Arc::new(ProxyDispatcher(event_loop.create_proxy()));
+    if mcp_enabled {
+        browser_mcp_server::spawn(Arc::clone(&dispatcher));
+        eprintln!("rab-browser MCP server enabled on stdio");
+    }
+    // control_listener is Some here: a bind failure with mcp_enabled already
+    // returned early above, and a bind failure without mcp_enabled just
+    // means this plain launch opens its own window without offering
+    // attachment (see try_bind_control_socket's doc comment).
+    if let Some(control_listener) = control_listener {
+        match browser_mcp_server::write_control_token() {
+            Ok(token) => {
+                browser_mcp_server::spawn_control_socket(
+                    Arc::clone(&dispatcher),
+                    control_listener,
+                    token,
+                );
+            }
+            Err(error) => {
+                eprintln!(
+                    "failed to write rab-browser MCP control-socket auth token: {error}; \
+                     later --mcp launches will open their own windows instead of attaching"
+                );
+            }
+        }
+    }
+
     let window = WindowBuilder::new()
         .with_title("rab-browser")
         .with_inner_size(LogicalSize::new(1180.0, 760.0))
@@ -1694,34 +1758,6 @@ fn main() -> wry::Result<()> {
         .build_as_child(&window)?;
     let _chrome_ui_delegate = browser_engine_wry::install_js_dialog_delegate(&chrome);
     chrome.set_bounds(chrome_bounds(&window))?;
-
-    let dispatcher: Arc<dyn RequestDispatcher> =
-        Arc::new(ProxyDispatcher(event_loop.create_proxy()));
-    if mcp_enabled {
-        browser_mcp_server::spawn(Arc::clone(&dispatcher));
-        eprintln!("rab-browser MCP server enabled on stdio");
-    }
-    // control_listener is Some here: a bind failure with mcp_enabled already
-    // returned early above, and a bind failure without mcp_enabled just
-    // means this plain launch opens its own window without offering
-    // attachment (see try_bind_control_socket's doc comment).
-    if let Some(control_listener) = control_listener {
-        match browser_mcp_server::write_control_token() {
-            Ok(token) => {
-                browser_mcp_server::spawn_control_socket(
-                    Arc::clone(&dispatcher),
-                    control_listener,
-                    token,
-                );
-            }
-            Err(error) => {
-                eprintln!(
-                    "failed to write rab-browser MCP control-socket auth token: {error}; \
-                     later --mcp launches will open their own windows instead of attaching"
-                );
-            }
-        }
-    }
 
     let mut modifiers = ModifiersState::empty();
     let mut palette_open = false;
