@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 anyhow = "1"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+rand = "0.10"
 rmcp = { version = "3.0.0-beta.2", features = ["macros", "server", "tower", "transport-io", "transport-streamable-http-server"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

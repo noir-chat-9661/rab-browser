@@ -1,6 +1,6 @@
 //! MCP tools for controlling a running rab-browser GUI.
 
-use std::{fmt, sync::Arc, thread::JoinHandle, time::Duration};
+use std::{fmt, path::PathBuf, sync::Arc, thread::JoinHandle, time::Duration};
 
 use rmcp::{
     ErrorData, ServerHandler, ServiceExt,
@@ -394,17 +394,71 @@ pub fn spawn(dispatcher: Arc<dyn RequestDispatcher>) -> JoinHandle<()> {
 /// rab-browser GUI instance (see [`spawn_control_socket`]). This is
 /// internal single-instance coordination, distinct from the user-facing,
 /// user-configurable Streamable HTTP MCP port exposed by [`spawn_http`].
+/// A bare loopback TCP port has no OS-level notion of "which local user/app
+/// is on the other end", so every connection to it must additionally prove
+/// it holds [`control_token_path`]'s contents before getting an MCP session
+/// (see [`spawn_control_socket`]) — otherwise any other local process could
+/// drive the browser (read page content, run arbitrary JS, ...).
 pub const CONTROL_PORT: u16 = 47289;
 
-/// Accepts connections on `listener` and serves each one as its own MCP
-/// session against the shared `dispatcher`, so every `--mcp` launch of
-/// rab-browser after the first attaches to the same running GUI instance
-/// instead of spawning a duplicate window (see `try_bind_control_socket`
-/// and the stdio<->TCP relay in `browser-app`, which together implement
-/// this single-instance behavior).
+fn control_state_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".rab-browser"))
+}
+
+/// Path to the per-user control-socket auth token file.
+pub fn control_token_path() -> Option<PathBuf> {
+    control_state_dir().map(|dir| dir.join("control.token"))
+}
+
+/// Generates a fresh random token and writes it to [`control_token_path`]
+/// with owner-only permissions (best-effort on non-Unix targets, which
+/// default new files to the current user's profile already). Called once by
+/// the primary instance before it starts accepting control-socket
+/// connections; every later `--mcp` launch reads this file to authenticate.
+pub fn write_control_token() -> std::io::Result<String> {
+    use rand::RngExt;
+    let token: String = {
+        let mut rng = rand::rng();
+        (0..32)
+            .map(|_| format!("{:02x}", rng.random::<u8>()))
+            .collect()
+    };
+    let path = control_token_path()
+        .ok_or_else(|| std::io::Error::other("HOME environment variable is not set"))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+        #[cfg(unix)]
+        std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700u32))?;
+    }
+    std::fs::write(&path, &token)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(
+        &path,
+        std::os::unix::fs::PermissionsExt::from_mode(0o600u32),
+    )?;
+    Ok(token)
+}
+
+/// Reads the token written by [`write_control_token`].
+pub fn read_control_token() -> std::io::Result<String> {
+    let path = control_token_path()
+        .ok_or_else(|| std::io::Error::other("HOME environment variable is not set"))?;
+    std::fs::read_to_string(path)
+}
+
+/// Accepts connections on `listener`. Each connection must first send the
+/// contents of [`control_token_path`] as a single line before it's treated
+/// as an MCP session against the shared `dispatcher` — so every `--mcp`
+/// launch of rab-browser after the first attaches to the same running GUI
+/// instance instead of spawning a duplicate window (see
+/// `try_bind_control_socket` and the stdio<->TCP relay in `browser-app`,
+/// which together implement this single-instance behavior), while an
+/// unrelated local process holding the port, or one without read access to
+/// the token file, cannot.
 pub fn spawn_control_socket(
     dispatcher: Arc<dyn RequestDispatcher>,
     listener: std::net::TcpListener,
+    token: String,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -432,13 +486,30 @@ pub fn spawn_control_socket(
                     Ok((stream, _addr)) => stream,
                     Err(error) => {
                         eprintln!("rab-browser MCP control-socket accept failed: {error}");
+                        // A transient accept() failure (e.g. fd exhaustion)
+                        // would otherwise busy-loop here with no backoff.
+                        tokio::time::sleep(Duration::from_millis(200)).await;
                         continue;
                     }
                 };
                 let dispatcher = Arc::clone(&dispatcher);
+                let token = token.clone();
                 tokio::spawn(async move {
+                    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+                    let (read_half, mut write_half) = tokio::io::split(stream);
+                    let mut reader = BufReader::new(read_half);
+                    let mut presented = String::new();
+                    if reader.read_line(&mut presented).await.is_err()
+                        || presented.trim_end() != token
+                    {
+                        let _ = write_half.write_all(b"ERR\n").await;
+                        return;
+                    }
+                    if write_half.write_all(b"OK\n").await.is_err() {
+                        return;
+                    }
                     let server = BrowserMcpServer::new(dispatcher);
-                    match server.serve(stream).await {
+                    match server.serve((reader, write_half)).await {
                         Ok(service) => {
                             if let Err(error) = service.waiting().await {
                                 eprintln!(
