@@ -1602,9 +1602,12 @@ fn try_handshake() -> Option<(TcpStream, TcpStream)> {
     socket_write
         .write_all(format!("{token}\n").as_bytes())
         .ok()?;
-    let mut ack = [0u8; 8];
-    let read = socket_read.read(&mut ack).ok()?;
-    if String::from_utf8_lossy(&ack[..read]).trim_end() != "OK" {
+    // read_exact, not read: TCP is a byte stream, so the server's "OK\n"
+    // isn't guaranteed to arrive in a single read() call even though it
+    // reliably does on loopback in practice — a short read here would be
+    // misread as a failed handshake.
+    let mut ack = [0u8; 3];
+    if socket_read.read_exact(&mut ack).is_err() || &ack != b"OK\n" {
         return None;
     }
     // The relay below must block indefinitely (it's proxying a live MCP
