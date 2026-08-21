@@ -86,28 +86,62 @@ rm -f "$dmg_path"
 # no icon-layout option), then that writable image is converted to the
 # final compressed one.
 dmg_staging_dir="target/release/dmg-staging"
+volume_name="$app_name"
+rw_dmg_path="target/release/${app_name}-rw.dmg"
+mount_dir=""
+attached_device=""
+
+cleanup() {
+  local exit_status=$?
+
+  if [[ -n "$mount_dir" ]]; then
+    hdiutil detach "$mount_dir" -quiet 2>/dev/null || true
+  elif [[ -n "$attached_device" ]]; then
+    # Fall back to the attached device if parsing the mount point failed.
+    hdiutil detach "$attached_device" -quiet 2>/dev/null || true
+  fi
+  rm -f "$rw_dmg_path" 2>/dev/null || true
+  rm -rf "$dmg_staging_dir" 2>/dev/null || true
+
+  exit "$exit_status"
+}
+trap cleanup EXIT
+
 rm -rf "$dmg_staging_dir"
 mkdir -p "$dmg_staging_dir"
-trap 'rm -rf "$dmg_staging_dir"' EXIT
 # ditto, not cp -R: preserves the ad-hoc code signature's extended
 # attributes, which a plain recursive copy isn't guaranteed to.
 ditto "$app_dir" "$dmg_staging_dir/$(basename "$app_dir")"
 ln -s /Applications "$dmg_staging_dir/Applications"
 
-volume_name="$app_name"
-rw_dmg_path="target/release/${app_name}-rw.dmg"
 rm -f "$rw_dmg_path"
 hdiutil create -volname "$volume_name" -srcfolder "$dmg_staging_dir" -ov -format UDRW "$rw_dmg_path"
 
-mount_dir="/Volumes/${volume_name}"
-if [[ -d "$mount_dir" ]]; then
-  hdiutil detach "$mount_dir" -quiet 2>/dev/null || true
+attach_plist="$(hdiutil attach "$rw_dmg_path" -noautoopen -plist)"
+entity_index=0
+while [[ "$entity_index" -lt 16 ]]; do
+  entity_device="$(printf '%s\n' "$attach_plist" | plutil -extract "system-entities.${entity_index}.dev-entry" raw -o - -- - 2>/dev/null || true)"
+  if [[ -z "$attached_device" && -n "$entity_device" ]]; then
+    attached_device="$entity_device"
+  fi
+
+  mount_candidate="$(printf '%s\n' "$attach_plist" | plutil -extract "system-entities.${entity_index}.mount-point" raw -o - -- - 2>/dev/null || true)"
+  if [[ -n "$mount_candidate" ]]; then
+    mount_dir="$mount_candidate"
+    break
+  fi
+  entity_index=$((entity_index + 1))
+done
+
+if [[ -z "$mount_dir" ]]; then
+  echo "Could not determine the mounted volume path from hdiutil attach." >&2
+  exit 1
 fi
-hdiutil attach "$rw_dmg_path" -noautoopen -quiet
 
 osascript <<OSA
 tell application "Finder"
-  tell disk "${volume_name}"
+  set mountedDisk to disk (POSIX file "${mount_dir}" as alias)
+  tell mountedDisk
     open
     delay 2
     set current view of container window to icon view
@@ -129,8 +163,9 @@ end tell
 OSA
 
 hdiutil detach "$mount_dir" -quiet
+mount_dir=""
+attached_device=""
 hdiutil convert "$rw_dmg_path" -format UDZO -ov -o "$dmg_path"
-rm -f "$rw_dmg_path"
 
 echo "==> done: $app_dir, $dmg_path"
 open -R "$app_dir" 2>/dev/null || true
