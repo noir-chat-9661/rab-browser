@@ -1899,6 +1899,7 @@ fn main() -> wry::Result<()> {
                             }
                         }
                         ChromeCommand::NewTab { url } => {
+                            let has_destination = url.is_some();
                             if add_tab(
                                 &window,
                                 &mut tabs,
@@ -1915,7 +1916,16 @@ fn main() -> wry::Result<()> {
                             .is_ok()
                             {
                                 bring_chrome_to_front(&chrome);
-                                focus_location(&window, &chrome, &mut palette_open);
+                                // Only prompt for a destination when this
+                                // tab was created without one (e.g. the MCP
+                                // new_tab tool with no url). The deferred
+                                // new-tab flow already navigated it in the
+                                // same request, so reopening the location
+                                // bar here would immediately re-edit the
+                                // URL the user just submitted.
+                                if !has_destination {
+                                    focus_location(&window, &chrome, &mut palette_open);
+                                }
                                 state_changed = true;
                             }
                         }

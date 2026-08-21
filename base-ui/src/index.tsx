@@ -478,6 +478,7 @@ function App() {
 
   const openSettings = () => {
     setLocationOpen(false);
+    setNewTabPending(false);
     if (!settingsOpen()) {
       setSettingsOpen(true);
       send({ type: "palette_opened" });
