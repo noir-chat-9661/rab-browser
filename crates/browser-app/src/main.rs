@@ -10,7 +10,7 @@ use std::{
     collections::BTreeMap,
     env, fs,
     io::{self, ErrorKind},
-    net::{Ipv4Addr, TcpListener},
+    net::{Ipv4Addr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -1569,8 +1569,47 @@ fn handle_mcp_request(
     }
 }
 
+/// Tries to claim the single-instance control port (see
+/// `browser_mcp_server::CONTROL_PORT`). `Some` means this process is the
+/// primary GUI instance and now owns the listener; `None` means another
+/// instance already holds it.
+fn try_bind_control_socket() -> Option<TcpListener> {
+    let listener =
+        TcpListener::bind((Ipv4Addr::LOCALHOST, browser_mcp_server::CONTROL_PORT)).ok()?;
+    listener.set_nonblocking(true).ok()?;
+    Some(listener)
+}
+
+/// Relays this process's stdio to an already-running primary instance's
+/// control socket, so a second `--mcp` launch (e.g. a new MCP client
+/// session) attaches to the same browser instead of opening a duplicate
+/// window. Blocks until either side closes the connection.
+fn relay_stdio_to_existing_instance() -> io::Result<()> {
+    let socket_read = TcpStream::connect((Ipv4Addr::LOCALHOST, browser_mcp_server::CONTROL_PORT))?;
+    let mut socket_write = socket_read.try_clone()?;
+    let stdin_to_socket = std::thread::spawn(move || {
+        let _ = io::copy(&mut io::stdin(), &mut socket_write);
+        let _ = socket_write.shutdown(std::net::Shutdown::Write);
+    });
+    let _ = io::copy(&mut { socket_read }, &mut io::stdout());
+    let _ = stdin_to_socket.join();
+    Ok(())
+}
+
 fn main() -> wry::Result<()> {
     let (mcp_enabled, initial_url) = parse_startup_args(env::args().skip(1));
+
+    // Single-instance handoff: only one rab-browser GUI should exist at a
+    // time. If one is already running (it holds the control port), an
+    // `--mcp` launch attaches to it over that socket instead of opening a
+    // second window; a plain launch falls through to opening its own window
+    // as before (raising an existing window across processes is out of
+    // scope here).
+    let control_listener = try_bind_control_socket();
+    if control_listener.is_none() && mcp_enabled {
+        return relay_stdio_to_existing_instance().map_err(wry::Error::Io);
+    }
+
     let event_loop = EventLoopBuilder::<McpRequest>::with_user_event().build();
     let window = WindowBuilder::new()
         .with_title("rab-browser")
@@ -1628,6 +1667,13 @@ fn main() -> wry::Result<()> {
     if mcp_enabled {
         browser_mcp_server::spawn(Arc::clone(&dispatcher));
         eprintln!("rab-browser MCP server enabled on stdio");
+    }
+    // control_listener is Some here: a bind failure with mcp_enabled already
+    // returned early above, and a bind failure without mcp_enabled just
+    // means this plain launch opens its own window without offering
+    // attachment (see try_bind_control_socket's doc comment).
+    if let Some(control_listener) = control_listener {
+        browser_mcp_server::spawn_control_socket(Arc::clone(&dispatcher), control_listener);
     }
 
     let mut modifiers = ModifiersState::empty();

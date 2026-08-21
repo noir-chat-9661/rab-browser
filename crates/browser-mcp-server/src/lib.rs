@@ -390,6 +390,74 @@ pub fn spawn(dispatcher: Arc<dyn RequestDispatcher>) -> JoinHandle<()> {
     })
 }
 
+/// Fixed loopback port used to detect and reach an already-running
+/// rab-browser GUI instance (see [`spawn_control_socket`]). This is
+/// internal single-instance coordination, distinct from the user-facing,
+/// user-configurable Streamable HTTP MCP port exposed by [`spawn_http`].
+pub const CONTROL_PORT: u16 = 47289;
+
+/// Accepts connections on `listener` and serves each one as its own MCP
+/// session against the shared `dispatcher`, so every `--mcp` launch of
+/// rab-browser after the first attaches to the same running GUI instance
+/// instead of spawning a duplicate window (see `try_bind_control_socket`
+/// and the stdio<->TCP relay in `browser-app`, which together implement
+/// this single-instance behavior).
+pub fn spawn_control_socket(
+    dispatcher: Arc<dyn RequestDispatcher>,
+    listener: std::net::TcpListener,
+) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                eprintln!("failed to start rab-browser MCP control-socket runtime: {error}");
+                return;
+            }
+        };
+        runtime.block_on(async move {
+            let listener = match tokio::net::TcpListener::from_std(listener) {
+                Ok(listener) => listener,
+                Err(error) => {
+                    eprintln!(
+                        "failed to configure rab-browser MCP control-socket listener: {error}"
+                    );
+                    return;
+                }
+            };
+            loop {
+                let stream = match listener.accept().await {
+                    Ok((stream, _addr)) => stream,
+                    Err(error) => {
+                        eprintln!("rab-browser MCP control-socket accept failed: {error}");
+                        continue;
+                    }
+                };
+                let dispatcher = Arc::clone(&dispatcher);
+                tokio::spawn(async move {
+                    let server = BrowserMcpServer::new(dispatcher);
+                    match server.serve(stream).await {
+                        Ok(service) => {
+                            if let Err(error) = service.waiting().await {
+                                eprintln!(
+                                    "rab-browser MCP control-socket session stopped: {error}"
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "failed to serve rab-browser MCP control-socket session: {error}"
+                            )
+                        }
+                    }
+                });
+            }
+        });
+    })
+}
+
 /// A running Streamable HTTP MCP server.
 pub struct McpHttpHandle {
     token: CancellationToken,
