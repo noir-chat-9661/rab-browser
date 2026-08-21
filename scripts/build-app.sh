@@ -79,7 +79,16 @@ codesign --force --deep --sign - "$app_dir"
 dmg_path="target/release/${app_name}-${version}.dmg"
 echo "==> hdiutil create (.dmg)"
 rm -f "$dmg_path"
-hdiutil create -volname "$app_name" -srcfolder "$app_dir" -ov -format UDZO "$dmg_path"
+# Stage the .app alongside an /Applications symlink so the mounted volume
+# shows the familiar "drag app onto Applications" layout instead of just
+# the bare .app.
+dmg_staging_dir="target/release/dmg-staging"
+rm -rf "$dmg_staging_dir"
+mkdir -p "$dmg_staging_dir"
+cp -R "$app_dir" "$dmg_staging_dir/"
+ln -s /Applications "$dmg_staging_dir/Applications"
+hdiutil create -volname "$app_name" -srcfolder "$dmg_staging_dir" -ov -format UDZO "$dmg_path"
+rm -rf "$dmg_staging_dir"
 
 echo "==> done: $app_dir, $dmg_path"
 open -R "$app_dir" 2>/dev/null || true
