@@ -80,8 +80,11 @@ dmg_path="target/release/${app_name}-${version}.dmg"
 echo "==> hdiutil create (.dmg)"
 rm -f "$dmg_path"
 # Stage the .app alongside an /Applications symlink so the mounted volume
-# shows the familiar "drag app onto Applications" layout instead of just
-# the bare .app.
+# shows the familiar "drag app onto Applications (on the right)" layout
+# instead of just the bare .app. The positions below are set by opening a
+# writable dmg in Finder and driving it with AppleScript (hdiutil alone has
+# no icon-layout option), then that writable image is converted to the
+# final compressed one.
 dmg_staging_dir="target/release/dmg-staging"
 rm -rf "$dmg_staging_dir"
 mkdir -p "$dmg_staging_dir"
@@ -90,7 +93,44 @@ trap 'rm -rf "$dmg_staging_dir"' EXIT
 # attributes, which a plain recursive copy isn't guaranteed to.
 ditto "$app_dir" "$dmg_staging_dir/$(basename "$app_dir")"
 ln -s /Applications "$dmg_staging_dir/Applications"
-hdiutil create -volname "$app_name" -srcfolder "$dmg_staging_dir" -ov -format UDZO "$dmg_path"
+
+volume_name="$app_name"
+rw_dmg_path="target/release/${app_name}-rw.dmg"
+rm -f "$rw_dmg_path"
+hdiutil create -volname "$volume_name" -srcfolder "$dmg_staging_dir" -ov -format UDRW "$rw_dmg_path"
+
+mount_dir="/Volumes/${volume_name}"
+if [[ -d "$mount_dir" ]]; then
+  hdiutil detach "$mount_dir" -quiet 2>/dev/null || true
+fi
+hdiutil attach "$rw_dmg_path" -noautoopen -quiet
+
+osascript <<OSA
+tell application "Finder"
+  tell disk "${volume_name}"
+    open
+    delay 2
+    set current view of container window to icon view
+    set toolbar visible of container window to false
+    set statusbar visible of container window to false
+    set the bounds of container window to {100, 100, 620, 420}
+    set viewOptions to the icon view options of container window
+    set arrangement of viewOptions to not arranged
+    set icon size of viewOptions to 96
+    delay 1
+    set position of item "${app_name}.app" of container window to {140, 160}
+    set position of item "Applications" of container window to {380, 160}
+    delay 1
+    update without registering applications
+    delay 2
+    close
+  end tell
+end tell
+OSA
+
+hdiutil detach "$mount_dir" -quiet
+hdiutil convert "$rw_dmg_path" -format UDZO -ov -o "$dmg_path"
+rm -f "$rw_dmg_path"
 
 echo "==> done: $app_dir, $dmg_path"
 open -R "$app_dir" 2>/dev/null || true
