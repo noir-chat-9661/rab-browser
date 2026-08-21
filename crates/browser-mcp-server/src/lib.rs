@@ -402,13 +402,22 @@ pub fn spawn(dispatcher: Arc<dyn RequestDispatcher>) -> JoinHandle<()> {
 pub const CONTROL_PORT: u16 = 47289;
 
 fn control_state_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".rab-browser"))
+    // HOME isn't reliably set on Windows (cmd.exe/older setups use
+    // USERPROFILE instead); without this fallback, single-instance handoff
+    // would silently never work there.
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(|home| PathBuf::from(home).join(".rab-browser"))
 }
 
 /// Path to the per-user control-socket auth token file.
 pub fn control_token_path() -> Option<PathBuf> {
     control_state_dir().map(|dir| dir.join("control.token"))
 }
+
+/// Length in bytes of the hex-encoded token written by
+/// [`write_control_token`] (32 random bytes, 2 hex chars each).
+const TOKEN_LEN: usize = 64;
 
 /// Generates a fresh random token and writes it to [`control_token_path`]
 /// with owner-only permissions (best-effort on non-Unix targets, which
@@ -419,7 +428,7 @@ pub fn write_control_token() -> std::io::Result<String> {
     use rand::RngExt;
     let token: String = {
         let mut rng = rand::rng();
-        (0..32)
+        (0..TOKEN_LEN / 2)
             .map(|_| format!("{:02x}", rng.random::<u8>()))
             .collect()
     };
@@ -430,12 +439,12 @@ pub fn write_control_token() -> std::io::Result<String> {
         #[cfg(unix)]
         std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700u32))?;
     }
-    std::fs::write(&path, &token)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
     #[cfg(unix)]
-    std::fs::set_permissions(
-        &path,
-        std::os::unix::fs::PermissionsExt::from_mode(0o600u32),
-    )?;
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    use std::io::Write;
+    options.open(&path)?.write_all(token.as_bytes())?;
     Ok(token)
 }
 
@@ -495,13 +504,24 @@ pub fn spawn_control_socket(
                 let dispatcher = Arc::clone(&dispatcher);
                 let token = token.clone();
                 tokio::spawn(async move {
-                    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-                    let (read_half, mut write_half) = tokio::io::split(stream);
-                    let mut reader = BufReader::new(read_half);
-                    let mut presented = String::new();
-                    if reader.read_line(&mut presented).await.is_err()
-                        || presented.trim_end() != token
-                    {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let (mut read_half, mut write_half) = tokio::io::split(stream);
+                    // Fixed-size read (the token is always TOKEN_LEN hex
+                    // chars + '\n'), bounded by a timeout: unlike
+                    // read_line, this can't be made to buffer unbounded
+                    // memory by a peer that withholds the newline.
+                    let mut presented = vec![0u8; TOKEN_LEN + 1];
+                    let handshake_ok = tokio::time::timeout(
+                        Duration::from_secs(5),
+                        read_half.read_exact(&mut presented),
+                    )
+                    .await
+                    .is_ok_and(|result| {
+                        result.is_ok()
+                            && presented.last() == Some(&b'\n')
+                            && presented[..TOKEN_LEN] == *token.as_bytes()
+                    });
+                    if !handshake_ok {
                         let _ = write_half.write_all(b"ERR\n").await;
                         return;
                     }
@@ -509,7 +529,7 @@ pub fn spawn_control_socket(
                         return;
                     }
                     let server = BrowserMcpServer::new(dispatcher);
-                    match server.serve((reader, write_half)).await {
+                    match server.serve((read_half, write_half)).await {
                         Ok(service) => {
                             if let Err(error) = service.waiting().await {
                                 eprintln!(
