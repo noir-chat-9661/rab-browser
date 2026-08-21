@@ -65,7 +65,7 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
     const primaryOnly =
       !event.altKey && !hasSecondaryPrimaryModifier(event) && !event.shiftKey;
     let type = null;
-    if (primaryOnly && key === "t") type = "new_tab";
+    if (primaryOnly && key === "t") type = "open_new_tab_prompt";
     else if (primaryOnly && key === "l") type = "open_location";
     else if (primaryOnly && key === "r" && !isNewTabUrl(location.href)) {
       type = "reload";
