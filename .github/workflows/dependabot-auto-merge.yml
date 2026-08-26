@@ -5,6 +5,7 @@ on: pull_request
 permissions:
   contents: write
   pull-requests: write
+  security-events: read
 
 jobs:
   auto-merge:
@@ -16,6 +17,7 @@ jobs:
         uses: dependabot/fetch-metadata@v2
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
+          alert-lookup: true
 
       - name: Enable auto-merge for security updates
         if: steps.metadata.outputs.alert-state == 'OPEN'
