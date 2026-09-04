@@ -359,16 +359,37 @@ fn normalize_url(value: &str, search_engine: SearchEngine) -> String {
     }
 }
 
-/// localhostや裸のIPアドレスは開発サーバー等でhttp平文のみ待受けていることが多いため、
-/// これらはhttpsではなくhttpを既定スキームとする。
+/// `Url::host_str` returns IPv6 addresses wrapped in brackets (e.g.
+/// `"[::1]"`), which fails a plain `IpAddr` parse — check the structured
+/// `Host` instead so bracketed IPv6 literals are still recognized.
+fn is_localhost_or_ip(host: &url::Host<&str>) -> bool {
+    match host {
+        url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+        url::Host::Ipv4(_) | url::Host::Ipv6(_) => true,
+    }
+}
+
+/// Only loopback addresses (and the `localhost` name) default to http: a
+/// bare public IP is still someone's real server and may well speak TLS, so
+/// forcing http there would be its own regression, not a fix.
+fn is_loopback_host(host: &url::Host<&str>) -> bool {
+    match host {
+        url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+        url::Host::Ipv4(ip) => ip.is_loopback(),
+        url::Host::Ipv6(ip) => ip.is_loopback(),
+    }
+}
+
+/// localhostやループバックアドレスは開発サーバー等でhttp平文のみ待受けていることが
+/// 多いため、これらはhttpsではなくhttpを既定スキームとする。
 fn is_local_host(value: &str) -> bool {
     let Ok(url) = url::Url::parse(&format!("https://{value}")) else {
         return false;
     };
-    let Some(host) = url.host_str() else {
+    let Some(host) = url.host() else {
         return false;
     };
-    host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok()
+    is_loopback_host(&host)
 }
 
 fn is_likely_domain(value: &str) -> bool {
@@ -379,13 +400,14 @@ fn is_likely_domain(value: &str) -> bool {
     let Ok(url) = url::Url::parse(&format!("https://{value}")) else {
         return false;
     };
-    let Some(host) = url.host_str() else {
+    let (Some(host), Some(host_str)) = (url.host(), url.host_str()) else {
         return false;
     };
 
-    if host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok() {
+    if is_localhost_or_ip(&host) {
         return true;
     }
+    let host = host_str;
 
     let Some((domain, tld)) = host.rsplit_once('.') else {
         return false;
@@ -2440,7 +2462,27 @@ fn main() -> wry::Result<()> {
                             }
                         }
                         KeyCode::KeyW => {
-                            if let Some(id) = tabs.current_id() {
+                            if new_tab_prompt_open {
+                                // Same reasoning as ChromeCommand::CloseCurrentTab:
+                                // no tab backs the prompt yet, so cancel it
+                                // instead of closing the real tab underneath.
+                                new_tab_prompt_open = false;
+                                palette_open = false;
+                                apply_layout(
+                                    &window,
+                                    &chrome,
+                                    &views,
+                                    sidebar_visible,
+                                    palette_open,
+                                );
+                                let _ = chrome
+                                    .evaluate_script("window.rabChrome?.closeLocation?.();");
+                                if let Some(view) =
+                                    tabs.current_id().and_then(|id| views.get(&id))
+                                {
+                                    let _ = view.focus();
+                                }
+                            } else if let Some(id) = tabs.current_id() {
                                 let result = close_tab(
                                     &window,
                                     &mut tabs,
@@ -2944,6 +2986,22 @@ args = ["--serve"]
         assert_eq!(
             normalize_url("example.com", SearchEngine::Google),
             "https://example.com"
+        );
+        // Bracketed IPv6 loopback: Url::host_str keeps the brackets, which
+        // must still parse as a loopback address, not just IPv4/domain.
+        assert_eq!(
+            normalize_url("[::1]:3000", SearchEngine::Google),
+            "http://[::1]:3000"
+        );
+        assert_eq!(
+            normalize_url("LOCALHOST:3000", SearchEngine::Google),
+            "http://LOCALHOST:3000"
+        );
+        // A bare public IP is still someone's real server that may speak
+        // TLS just fine — only loopback should be downgraded to http.
+        assert_eq!(
+            normalize_url("8.8.8.8", SearchEngine::Google),
+            "https://8.8.8.8"
         );
     }
 
