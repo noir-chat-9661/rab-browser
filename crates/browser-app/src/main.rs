@@ -93,6 +93,8 @@ enum ChromeCommand {
     OpenSettings,
     PaletteOpened,
     PaletteClosed,
+    NewTabPromptOpened,
+    NewTabPromptClosed,
 }
 
 #[derive(Debug)]
@@ -346,10 +348,48 @@ fn normalize_url(value: &str, search_engine: SearchEngine) -> String {
     if has_explicit_scheme && url::Url::parse(value).is_ok() {
         value.to_owned()
     } else if is_likely_domain(value) {
-        format!("https://{value}")
+        let scheme = if is_local_host(value) {
+            "http"
+        } else {
+            "https"
+        };
+        format!("{scheme}://{value}")
     } else {
         search_url(value, search_engine)
     }
+}
+
+/// `Url::host_str` returns IPv6 addresses wrapped in brackets (e.g.
+/// `"[::1]"`), which fails a plain `IpAddr` parse — check the structured
+/// `Host` instead so bracketed IPv6 literals are still recognized.
+fn is_localhost_or_ip(host: &url::Host<&str>) -> bool {
+    match host {
+        url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+        url::Host::Ipv4(_) | url::Host::Ipv6(_) => true,
+    }
+}
+
+/// Only loopback addresses (and the `localhost` name) default to http: a
+/// bare public IP is still someone's real server and may well speak TLS, so
+/// forcing http there would be its own regression, not a fix.
+fn is_loopback_host(host: &url::Host<&str>) -> bool {
+    match host {
+        url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+        url::Host::Ipv4(ip) => ip.is_loopback(),
+        url::Host::Ipv6(ip) => ip.is_loopback(),
+    }
+}
+
+/// localhostやループバックアドレスは開発サーバー等でhttp平文のみ待受けていることが
+/// 多いため、これらはhttpsではなくhttpを既定スキームとする。
+fn is_local_host(value: &str) -> bool {
+    let Ok(url) = url::Url::parse(&format!("https://{value}")) else {
+        return false;
+    };
+    let Some(host) = url.host() else {
+        return false;
+    };
+    is_loopback_host(&host)
 }
 
 fn is_likely_domain(value: &str) -> bool {
@@ -360,13 +400,14 @@ fn is_likely_domain(value: &str) -> bool {
     let Ok(url) = url::Url::parse(&format!("https://{value}")) else {
         return false;
     };
-    let Some(host) = url.host_str() else {
+    let (Some(host), Some(host_str)) = (url.host(), url.host_str()) else {
         return false;
     };
 
-    if host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok() {
+    if is_localhost_or_ip(&host) {
         return true;
     }
+    let host = host_str;
 
     let Some((domain, tld)) = host.rsplit_once('.') else {
         return false;
@@ -1000,8 +1041,14 @@ fn apply_layout(
     let _ = chrome.set_visible(chrome_visible);
 }
 
-fn focus_location(window: &Window, chrome: &WebView, palette_open: &mut bool) {
+fn focus_location(
+    window: &Window,
+    chrome: &WebView,
+    palette_open: &mut bool,
+    new_tab_prompt_open: &mut bool,
+) {
     *palette_open = true;
+    *new_tab_prompt_open = false;
     let _ = chrome.set_visible(true);
     let _ = chrome.set_bounds(full_window_bounds(window));
     bring_chrome_to_front(chrome);
@@ -1013,9 +1060,17 @@ fn focus_location(window: &Window, chrome: &WebView, palette_open: &mut bool) {
 /// is created until the user actually submits a destination (see
 /// `openNewTabPrompt` in base-ui). This is the native-level path for Cmd+T,
 /// used when the chrome WebView doesn't have focus to receive the keydown
-/// itself (e.g. focus is in a content tab).
-fn focus_new_tab_prompt(window: &Window, chrome: &WebView, palette_open: &mut bool) {
+/// itself (e.g. focus is in a content tab). `new_tab_prompt_open` is set
+/// directly (not just left to base-ui's own IPC round-trip) so a Cmd+W typed
+/// right after Cmd+T can't race ahead of it and reach close_tab.
+fn focus_new_tab_prompt(
+    window: &Window,
+    chrome: &WebView,
+    palette_open: &mut bool,
+    new_tab_prompt_open: &mut bool,
+) {
     *palette_open = true;
+    *new_tab_prompt_open = true;
     let _ = chrome.set_visible(true);
     let _ = chrome.set_bounds(full_window_bounds(window));
     bring_chrome_to_front(chrome);
@@ -1779,6 +1834,10 @@ fn main() -> wry::Result<()> {
 
     let mut modifiers = ModifiersState::empty();
     let mut palette_open = false;
+    // Set only while base-ui's deferred "new tab" address-bar prompt is
+    // showing (see NewTabPromptOpened/Closed below): no tab exists for it
+    // yet, so Cmd+W must cancel the prompt instead of reaching close_tab.
+    let mut new_tab_prompt_open = false;
     let mut mcp_http: Option<McpHttpHandle> = None;
     let mut mcp_http_state = McpHttpState::default();
     event_loop.run(move |event, _, control_flow| {
@@ -1876,7 +1935,7 @@ fn main() -> wry::Result<()> {
                             // real send_state, not just when something
                             // happens to change afterward.
                             if current_tab_is_new(&tabs) {
-                                focus_location(&window, &chrome, &mut palette_open);
+                                focus_location(&window, &chrome, &mut palette_open, &mut new_tab_prompt_open);
                             }
                             state_changed = true;
                         }
@@ -1924,7 +1983,7 @@ fn main() -> wry::Result<()> {
                                 // bar here would immediately re-edit the
                                 // URL the user just submitted.
                                 if !has_destination {
-                                    focus_location(&window, &chrome, &mut palette_open);
+                                    focus_location(&window, &chrome, &mut palette_open, &mut new_tab_prompt_open);
                                 }
                                 state_changed = true;
                             }
@@ -1954,7 +2013,27 @@ fn main() -> wry::Result<()> {
                             }
                         }
                         ChromeCommand::CloseCurrentTab => {
-                            if let Some(id) = tabs.current_id() {
+                            if new_tab_prompt_open {
+                                // No tab backs this prompt yet (see
+                                // NewTabPromptOpened) — cancel it instead of
+                                // closing whatever real tab sits underneath.
+                                new_tab_prompt_open = false;
+                                palette_open = false;
+                                apply_layout(
+                                    &window,
+                                    &chrome,
+                                    &views,
+                                    sidebar_visible,
+                                    palette_open,
+                                );
+                                let _ = chrome
+                                    .evaluate_script("window.rabChrome?.closeLocation?.();");
+                                if let Some(view) =
+                                    tabs.current_id().and_then(|id| views.get(&id))
+                                {
+                                    let _ = view.focus();
+                                }
+                            } else if let Some(id) = tabs.current_id() {
                                 let result = close_tab(
                                     &window,
                                     &mut tabs,
@@ -2019,10 +2098,10 @@ fn main() -> wry::Result<()> {
                             }
                         }
                         ChromeCommand::OpenLocation => {
-                            focus_location(&window, &chrome, &mut palette_open);
+                            focus_location(&window, &chrome, &mut palette_open, &mut new_tab_prompt_open);
                         }
                         ChromeCommand::OpenNewTabPrompt => {
-                            focus_new_tab_prompt(&window, &chrome, &mut palette_open);
+                            focus_new_tab_prompt(&window, &chrome, &mut palette_open, &mut new_tab_prompt_open);
                         }
                         ChromeCommand::GoBack => {
                             if let Some(id) = tabs.current_id()
@@ -2270,6 +2349,12 @@ fn main() -> wry::Result<()> {
                                 let _ = view.focus();
                             }
                         }
+                        ChromeCommand::NewTabPromptOpened => {
+                            new_tab_prompt_open = true;
+                        }
+                        ChromeCommand::NewTabPromptClosed => {
+                            new_tab_prompt_open = false;
+                        }
                     }
                 }
 
@@ -2318,10 +2403,10 @@ fn main() -> wry::Result<()> {
                 {
                     match event.physical_key {
                         KeyCode::KeyL => {
-                            focus_location(&window, &chrome, &mut palette_open);
+                            focus_location(&window, &chrome, &mut palette_open, &mut new_tab_prompt_open);
                         }
                         KeyCode::KeyT => {
-                            focus_new_tab_prompt(&window, &chrome, &mut palette_open);
+                            focus_new_tab_prompt(&window, &chrome, &mut palette_open, &mut new_tab_prompt_open);
                         }
                         KeyCode::KeyR => {
                             if !current_tab_is_new(&tabs)
@@ -2377,7 +2462,27 @@ fn main() -> wry::Result<()> {
                             }
                         }
                         KeyCode::KeyW => {
-                            if let Some(id) = tabs.current_id() {
+                            if new_tab_prompt_open {
+                                // Same reasoning as ChromeCommand::CloseCurrentTab:
+                                // no tab backs the prompt yet, so cancel it
+                                // instead of closing the real tab underneath.
+                                new_tab_prompt_open = false;
+                                palette_open = false;
+                                apply_layout(
+                                    &window,
+                                    &chrome,
+                                    &views,
+                                    sidebar_visible,
+                                    palette_open,
+                                );
+                                let _ = chrome
+                                    .evaluate_script("window.rabChrome?.closeLocation?.();");
+                                if let Some(view) =
+                                    tabs.current_id().and_then(|id| views.get(&id))
+                                {
+                                    let _ = view.focus();
+                                }
+                            } else if let Some(id) = tabs.current_id() {
                                 let result = close_tab(
                                     &window,
                                     &mut tabs,
@@ -2864,17 +2969,39 @@ args = ["--serve"]
             normalize_url("https://", SearchEngine::Google),
             "https://www.google.com/search?q=https%3A%2F%2F"
         );
+        // localhost/IP hosts default to http: dev servers typically don't
+        // speak TLS, and forcing https just fails the connection outright.
         assert_eq!(
             normalize_url("localhost", SearchEngine::Google),
-            "https://localhost"
+            "http://localhost"
         );
         assert_eq!(
             normalize_url("localhost:3000", SearchEngine::Google),
-            "https://localhost:3000"
+            "http://localhost:3000"
         );
         assert_eq!(
             normalize_url("127.0.0.1:8080", SearchEngine::Google),
-            "https://127.0.0.1:8080"
+            "http://127.0.0.1:8080"
+        );
+        assert_eq!(
+            normalize_url("example.com", SearchEngine::Google),
+            "https://example.com"
+        );
+        // Bracketed IPv6 loopback: Url::host_str keeps the brackets, which
+        // must still parse as a loopback address, not just IPv4/domain.
+        assert_eq!(
+            normalize_url("[::1]:3000", SearchEngine::Google),
+            "http://[::1]:3000"
+        );
+        assert_eq!(
+            normalize_url("LOCALHOST:3000", SearchEngine::Google),
+            "http://LOCALHOST:3000"
+        );
+        // A bare public IP is still someone's real server that may speak
+        // TLS just fine — only loopback should be downgraded to http.
+        assert_eq!(
+            normalize_url("8.8.8.8", SearchEngine::Google),
+            "https://8.8.8.8"
         );
     }
 
