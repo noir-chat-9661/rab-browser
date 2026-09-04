@@ -210,6 +210,94 @@ svg {
   padding: 0 3px;
 }
 
+.find-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3px;
+  min-height: 32px;
+  margin: -5px 0 10px;
+  padding: 3px 4px 3px 7px;
+  background: var(--accent-bg);
+  border: 1px solid var(--border-accent-soft);
+  border-radius: 4px;
+}
+
+.find-field {
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr);
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+  color: var(--accent);
+}
+
+.find-field input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  color: var(--text-input);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font-size: 11px;
+  user-select: text;
+}
+
+.find-field input::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+.find-bar:has(input[aria-invalid="true"]) {
+  border-color: var(--danger);
+}
+
+/* .find-field's own outline is suppressed above so the input doesn't draw a
+   ring around just the text — the container still needs one for keyboard
+   users to see. */
+.find-field:has(input:focus-visible) {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.find-actions {
+  display: flex;
+  gap: 1px;
+}
+
+.find-action {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  place-items: center;
+  color: var(--text-icon);
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+}
+
+.find-action:hover:not(:disabled) {
+  color: var(--text-bright);
+  background: var(--muted-bg);
+}
+
+.find-action:disabled {
+  color: var(--text-disabled);
+}
+
+.find-action svg {
+  width: 13px;
+  height: 13px;
+}
+
+.find-close {
+  margin-left: 1px;
+  border-left: 1px solid var(--border-accent-soft);
+  border-radius: 0 3px 3px 0;
+}
+
 .settings-trigger {
   margin-left: auto;
 }
