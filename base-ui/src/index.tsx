@@ -78,6 +78,7 @@ type ChromeApi = {
   openNewTabPrompt: () => void;
   openSettings: () => void;
   openMcpHelp: () => void;
+  closeLocation: () => void;
 };
 
 declare global {
@@ -221,6 +222,13 @@ function App() {
   // cancelling creates nothing at all — no blank tab left behind to clean
   // up if the user changes their mind.
   const [newTabPending, setNewTabPending] = createSignal(false);
+  // Rust needs to know this independently of "palette open" (Cmd+L can
+  // switch an already-open palette out of new-tab mode without closing it):
+  // it's what lets Cmd+W cancel the prompt instead of closing the real tab
+  // sitting underneath, since no tab actually exists yet for this prompt.
+  createEffect(() => {
+    send({ type: newTabPending() ? "new_tab_prompt_opened" : "new_tab_prompt_closed" });
+  });
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [settingsCategory, setSettingsCategory] =
     createSignal<SettingsCategory>("language");
@@ -530,6 +538,7 @@ function App() {
       openNewTabPrompt,
       openSettings,
       openMcpHelp,
+      closeLocation,
     };
     send({ type: "chrome_ready" });
 
