@@ -253,6 +253,14 @@ svg {
   border-color: var(--danger);
 }
 
+/* .find-field's own outline is suppressed above so the input doesn't draw a
+   ring around just the text — the container still needs one for keyboard
+   users to see. */
+.find-field:has(input:focus-visible) {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .find-actions {
   display: flex;
   gap: 1px;

@@ -62,36 +62,78 @@ impl RequestDispatcher for ProxyDispatcher {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ChromeCommand {
     ChromeReady,
-    SelectTab { id: u64 },
-    NewTab { url: Option<String> },
-    CloseTab { id: u64 },
+    SelectTab {
+        id: u64,
+    },
+    NewTab {
+        url: Option<String>,
+    },
+    CloseTab {
+        id: u64,
+    },
     CloseCurrentTab,
-    Navigate { url: String },
-    ContentUrlChanged { url: String },
+    Navigate {
+        url: String,
+    },
+    ContentUrlChanged {
+        url: String,
+    },
     OpenLocation,
     OpenNewTabPrompt,
     OpenFindBar,
-    FindInPage { query: String, backwards: bool },
-    FindInPageResult { query: String, found: bool },
+    FindInPage {
+        query: String,
+        backwards: bool,
+    },
+    FindInPageResult {
+        query: String,
+        found: bool,
+        #[serde(rename = "tabId")]
+        tab_id: u64,
+        sequence: u64,
+    },
     CloseFindBar,
     GoBack,
     GoForward,
     Reload,
     ToggleSidebar,
     ToggleBookmark,
-    SelectBookmark { url: String },
-    RemoveBookmark { url: String },
+    SelectBookmark {
+        url: String,
+    },
+    RemoveBookmark {
+        url: String,
+    },
     ClearHistory,
     ClearCookies,
-    SetSearchEngine { engine: String },
-    SetTheme { theme: String },
-    SetMcpHttp { enabled: bool, port: u16 },
-    RegisterMcpClients { clients: Vec<String> },
-    SetLocale { locale: String },
-    SetTabSuspendEnabled { enabled: bool },
-    SetTabSuspendGrace { secs: u64 },
-    FaviconChanged { url: String },
-    MediaPlaybackChanged { playing: bool },
+    SetSearchEngine {
+        engine: String,
+    },
+    SetTheme {
+        theme: String,
+    },
+    SetMcpHttp {
+        enabled: bool,
+        port: u16,
+    },
+    RegisterMcpClients {
+        clients: Vec<String>,
+    },
+    SetLocale {
+        locale: String,
+    },
+    SetTabSuspendEnabled {
+        enabled: bool,
+    },
+    SetTabSuspendGrace {
+        secs: u64,
+    },
+    FaviconChanged {
+        url: String,
+    },
+    MediaPlaybackChanged {
+        playing: bool,
+    },
     OpenDevtools,
     OpenMcpHelp,
     OpenSettings,
@@ -1093,14 +1135,30 @@ fn open_find_bar(window: &Window, chrome: &WebView, sidebar_visible: &mut bool) 
     let _ = chrome.evaluate_script("window.rabChrome?.openFindBar(true);");
 }
 
-fn enqueue_find_result(commands_tx: &Sender<String>, query: String, found: bool) {
+/// Also wakes the event loop: `commands_tx` alone doesn't do that, and with
+/// `ControlFlow::Wait` a result posted from `evaluate_script_with_callback`'s
+/// background thread would otherwise sit in the channel, invisible to
+/// `Event::MainEventsCleared`, until some unrelated input event happened to
+/// wake the loop.
+fn enqueue_find_result(
+    commands_tx: &Sender<String>,
+    event_loop_proxy: &EventLoopProxy<McpRequest>,
+    query: String,
+    found: bool,
+    tab_id: TabId,
+    sequence: u64,
+) {
     let message = serde_json::json!({
         "type": "find_in_page_result",
         "query": query,
         "found": found,
+        "tabId": tab_id.get(),
+        "sequence": sequence,
     });
-    if let Ok(message) = serde_json::to_string(&message) {
-        let _ = commands_tx.send(message);
+    if let Ok(message) = serde_json::to_string(&message)
+        && commands_tx.send(message).is_ok()
+    {
+        let _ = event_loop_proxy.send_event(McpRequest::Wake);
     }
 }
 
@@ -1875,6 +1933,13 @@ fn main() -> wry::Result<()> {
     let mut new_tab_prompt_open = false;
     let mut mcp_http: Option<McpHttpHandle> = None;
     let mut mcp_http_state = McpHttpState::default();
+    // Identifies the tab/request a pending window.find() callback belongs to,
+    // so a result that lands after the user switched tabs, closed the find
+    // bar, or issued a newer search is dropped instead of shown for the
+    // wrong page.
+    let mut find_target_tab: Option<TabId> = None;
+    let mut find_sequence: u64 = 0;
+    let find_event_loop_proxy = event_loop.create_proxy();
     event_loop.run(move |event, _, control_flow| {
         #[cfg(target_os = "macos")]
         // Keep the monitor token with the event loop so its registration has the
@@ -2143,42 +2208,75 @@ fn main() -> wry::Result<()> {
                             apply_layout(&window, &chrome, &views, sidebar_visible, palette_open);
                         }
                         ChromeCommand::FindInPage { query, backwards } => {
+                            // Bumping the sequence on every call (even the
+                            // early-return ones below) invalidates any
+                            // in-flight callback from a previous search, so
+                            // it can't land after a newer/cleared one.
+                            find_sequence += 1;
+                            let sequence = find_sequence;
                             let Some(id) = tabs.current_id() else {
-                                enqueue_find_result(&commands_tx, query, false);
+                                find_target_tab = None;
+                                send_find_result(&chrome, &query, false);
                                 continue;
                             };
                             let Some(view) = views.get(&id) else {
-                                enqueue_find_result(&commands_tx, query, false);
+                                find_target_tab = None;
+                                send_find_result(&chrome, &query, false);
                                 continue;
                             };
                             if query.is_empty() {
-                                enqueue_find_result(&commands_tx, query, false);
+                                find_target_tab = None;
+                                send_find_result(&chrome, &query, false);
                                 continue;
                             }
                             let Ok(query_json) = serde_json::to_string(&query) else {
-                                enqueue_find_result(&commands_tx, query, false);
+                                find_target_tab = None;
+                                send_find_result(&chrome, &query, false);
                                 continue;
                             };
+                            find_target_tab = Some(id);
                             let script =
                                 format!("window.find({query_json}, false, {backwards})");
                             let result_tx = commands_tx.clone();
+                            let result_proxy = find_event_loop_proxy.clone();
                             let result_query = query.clone();
                             if let Err(error) = view.evaluate_script_with_callback(
                                 &script,
                                 move |raw| {
                                     let found = serde_json::from_str::<bool>(&raw).unwrap_or(false);
-                                    enqueue_find_result(&result_tx, result_query.clone(), found);
+                                    enqueue_find_result(
+                                        &result_tx,
+                                        &result_proxy,
+                                        result_query.clone(),
+                                        found,
+                                        id,
+                                        sequence,
+                                    );
                                 },
                             ) {
                                 eprintln!("failed to search page: {error}");
-                                enqueue_find_result(&commands_tx, query, false);
+                                send_find_result(&chrome, &query, false);
                             }
                         }
-                        ChromeCommand::FindInPageResult { query, found } => {
-                            send_find_result(&chrome, &query, found);
+                        ChromeCommand::FindInPageResult {
+                            query,
+                            found,
+                            tab_id,
+                            sequence,
+                        } => {
+                            // Drop results from a stale search: the user
+                            // switched tabs, cleared the query, or typed
+                            // again before this callback landed.
+                            if sequence == find_sequence
+                                && find_target_tab.map(TabId::get) == Some(tab_id)
+                            {
+                                send_find_result(&chrome, &query, found);
+                            }
                         }
                         ChromeCommand::CloseFindBar => {
-                            if let Some(view) = tabs.current_id().and_then(|id| views.get(&id)) {
+                            let target = find_target_tab.or_else(|| tabs.current_id());
+                            find_target_tab = None;
+                            if let Some(view) = target.and_then(|id| views.get(&id)) {
                                 let _ = view.evaluate_script(
                                     "window.getSelection()?.removeAllRanges();",
                                 );
