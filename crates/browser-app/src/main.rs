@@ -70,6 +70,10 @@ enum ChromeCommand {
     ContentUrlChanged { url: String },
     OpenLocation,
     OpenNewTabPrompt,
+    OpenFindBar,
+    FindInPage { query: String, backwards: bool },
+    FindInPageResult { query: String, found: bool },
+    CloseFindBar,
     GoBack,
     GoForward,
     Reload,
@@ -1076,6 +1080,37 @@ fn focus_new_tab_prompt(
     bring_chrome_to_front(chrome);
     let _ = chrome.focus();
     let _ = chrome.evaluate_script("window.rabChrome?.openNewTabPrompt();");
+}
+
+fn open_find_bar(window: &Window, chrome: &WebView, sidebar_visible: &mut bool) {
+    // Find-in-page lives in the sidebar, so opening it also makes that area
+    // visible when the page currently occupies the full window.
+    *sidebar_visible = true;
+    let _ = chrome.set_visible(true);
+    let _ = chrome.set_bounds(chrome_bounds(window));
+    bring_chrome_to_front(chrome);
+    let _ = chrome.focus();
+    let _ = chrome.evaluate_script("window.rabChrome?.openFindBar(true);");
+}
+
+fn enqueue_find_result(commands_tx: &Sender<String>, query: String, found: bool) {
+    let message = serde_json::json!({
+        "type": "find_in_page_result",
+        "query": query,
+        "found": found,
+    });
+    if let Ok(message) = serde_json::to_string(&message) {
+        let _ = commands_tx.send(message);
+    }
+}
+
+fn send_find_result(chrome: &WebView, query: &str, found: bool) {
+    let Ok(query_json) = serde_json::to_string(query) else {
+        return;
+    };
+    let _ = chrome.evaluate_script(&format!(
+        "window.rabChrome?.receiveFindResult({query_json}, {found});"
+    ));
 }
 
 fn open_settings(window: &Window, chrome: &WebView, palette_open: &mut bool) {
@@ -2103,6 +2138,52 @@ fn main() -> wry::Result<()> {
                         ChromeCommand::OpenNewTabPrompt => {
                             focus_new_tab_prompt(&window, &chrome, &mut palette_open, &mut new_tab_prompt_open);
                         }
+                        ChromeCommand::OpenFindBar => {
+                            open_find_bar(&window, &chrome, &mut sidebar_visible);
+                            apply_layout(&window, &chrome, &views, sidebar_visible, palette_open);
+                        }
+                        ChromeCommand::FindInPage { query, backwards } => {
+                            let Some(id) = tabs.current_id() else {
+                                enqueue_find_result(&commands_tx, query, false);
+                                continue;
+                            };
+                            let Some(view) = views.get(&id) else {
+                                enqueue_find_result(&commands_tx, query, false);
+                                continue;
+                            };
+                            if query.is_empty() {
+                                enqueue_find_result(&commands_tx, query, false);
+                                continue;
+                            }
+                            let Ok(query_json) = serde_json::to_string(&query) else {
+                                enqueue_find_result(&commands_tx, query, false);
+                                continue;
+                            };
+                            let script =
+                                format!("window.find({query_json}, false, {backwards})");
+                            let result_tx = commands_tx.clone();
+                            let result_query = query.clone();
+                            if let Err(error) = view.evaluate_script_with_callback(
+                                &script,
+                                move |raw| {
+                                    let found = serde_json::from_str::<bool>(&raw).unwrap_or(false);
+                                    enqueue_find_result(&result_tx, result_query.clone(), found);
+                                },
+                            ) {
+                                eprintln!("failed to search page: {error}");
+                                enqueue_find_result(&commands_tx, query, false);
+                            }
+                        }
+                        ChromeCommand::FindInPageResult { query, found } => {
+                            send_find_result(&chrome, &query, found);
+                        }
+                        ChromeCommand::CloseFindBar => {
+                            if let Some(view) = tabs.current_id().and_then(|id| views.get(&id)) {
+                                let _ = view.evaluate_script(
+                                    "window.getSelection()?.removeAllRanges();",
+                                );
+                            }
+                        }
                         ChromeCommand::GoBack => {
                             if let Some(id) = tabs.current_id()
                                 && let Some(history) = histories.get_mut(&id)
@@ -2407,6 +2488,10 @@ fn main() -> wry::Result<()> {
                         }
                         KeyCode::KeyT => {
                             focus_new_tab_prompt(&window, &chrome, &mut palette_open, &mut new_tab_prompt_open);
+                        }
+                        KeyCode::KeyF => {
+                            open_find_bar(&window, &chrome, &mut sidebar_visible);
+                            apply_layout(&window, &chrome, &views, sidebar_visible, palette_open);
                         }
                         KeyCode::KeyR => {
                             if !current_tab_is_new(&tabs)

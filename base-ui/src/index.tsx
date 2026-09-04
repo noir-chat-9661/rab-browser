@@ -76,6 +76,8 @@ type ChromeApi = {
   receive: (state: BrowserState) => void;
   openLocation: () => void;
   openNewTabPrompt: () => void;
+  openFindBar: (fromNative?: boolean) => void;
+  receiveFindResult: (query: string, found: boolean) => void;
   openSettings: () => void;
   openMcpHelp: () => void;
   closeLocation: () => void;
@@ -216,6 +218,9 @@ const mcpClients: McpClient[] = [
 function App() {
   const [state, setState] = createStore(emptyState);
   const [locationOpen, setLocationOpen] = createSignal(false);
+  const [findOpen, setFindOpen] = createSignal(false);
+  const [findQuery, setFindQuery] = createSignal("");
+  const [findFound, setFindFound] = createSignal<boolean | null>(null);
   // When the location bar was opened via "new tab" (button/Cmd+T) rather
   // than to edit the current tab's URL: submitting creates a tab at the
   // typed destination instead of navigating the current one, and
@@ -246,6 +251,7 @@ function App() {
     onConfirm: () => void;
   } | null>(null);
   let locationInput: HTMLInputElement | undefined;
+  let findInput: HTMLInputElement | undefined;
   let settingsCloseButton: HTMLButtonElement | undefined;
   let settingsContentPanel: HTMLDivElement | undefined;
   let confirmCancelButton: HTMLButtonElement | undefined;
@@ -447,7 +453,23 @@ function App() {
     send({ type: "palette_closed" });
   };
 
+  const closeFindBar = () => {
+    if (!findOpen()) return;
+    setFindOpen(false);
+    setFindQuery("");
+    setFindFound(null);
+    send({ type: "close_find_bar" });
+  };
+
+  const findInPage = (backwards: boolean) => {
+    const query = findQuery();
+    if (!query) return;
+    setFindFound(null);
+    send({ type: "find_in_page", query, backwards });
+  };
+
   const openLocation = () => {
+    closeFindBar();
     setSettingsOpen(false);
     setNewTabPending(false);
     setLocationValue(
@@ -466,6 +488,7 @@ function App() {
   // "New tab" (button/Cmd+T): opens the same location bar, but doesn't
   // create a tab until the user actually submits a destination.
   const openNewTabPrompt = () => {
+    closeFindBar();
     setSettingsOpen(false);
     setNewTabPending(true);
     setLocationValue("");
@@ -484,7 +507,34 @@ function App() {
     send({ type: "palette_closed" });
   };
 
+  const openFindBar = (fromNative = false) => {
+    const wasOpen = findOpen();
+    const paletteWasOpen = locationOpen() || settingsOpen();
+    setLocationOpen(false);
+    setNewTabPending(false);
+    setSettingsOpen(false);
+    if (paletteWasOpen) send({ type: "palette_closed" });
+    // A chrome-only Cmd+F can arrive while the sidebar is hidden behind a
+    // full-window palette, so native layout state must be updated too. The
+    // native path passes true to avoid echoing its own OpenFindBar command.
+    if (!fromNative) send({ type: "open_find_bar" });
+    setFindOpen(true);
+    if (!wasOpen) {
+      setFindQuery("");
+      setFindFound(null);
+    }
+    queueMicrotask(() => {
+      findInput?.focus();
+      findInput?.select();
+    });
+  };
+
+  const receiveFindResult = (query: string, found: boolean) => {
+    if (findOpen() && query === findQuery()) setFindFound(found);
+  };
+
   const openSettings = () => {
+    closeFindBar();
     setLocationOpen(false);
     setNewTabPending(false);
     if (!settingsOpen()) {
@@ -536,6 +586,8 @@ function App() {
       receive: receiveState,
       openLocation,
       openNewTabPrompt,
+      openFindBar,
+      receiveFindResult,
       openSettings,
       openMcpHelp,
       closeLocation,
@@ -559,6 +611,11 @@ function App() {
           closeSettings();
           return;
         }
+        if (findOpen()) {
+          event.preventDefault();
+          closeFindBar();
+          return;
+        }
         if (locationOpen()) {
           event.preventDefault();
           closeLocation();
@@ -580,6 +637,9 @@ function App() {
       } else if (key === "l") {
         event.preventDefault();
         openLocation();
+      } else if (key === "f") {
+        event.preventDefault();
+        openFindBar();
       } else if (key === "r") {
         event.preventDefault();
         if (!isNewTabUrl(currentTab()?.url ?? "")) {
@@ -641,6 +701,84 @@ function App() {
             <Gear />
           </button>
         </header>
+
+        <Show when={findOpen()}>
+          <form
+            class="find-bar"
+            role="search"
+            aria-label={t().findInPage}
+            onSubmit={(event) => {
+              event.preventDefault();
+              findInPage(false);
+            }}
+          >
+            <div class="find-field">
+              <Search />
+              <label class="sr-only" for="find-input">
+                {t().findInPage}
+              </label>
+              <input
+                ref={findInput}
+                id="find-input"
+                value={findQuery()}
+                aria-invalid={findFound() === false}
+                title={findFound() === false ? t().findNoResults : undefined}
+                autocomplete="off"
+                autocapitalize="off"
+                spellcheck={false}
+                placeholder={t().findPlaceholder}
+                onInput={(event) => {
+                  const query = event.currentTarget.value;
+                  setFindQuery(query);
+                  setFindFound(null);
+                  if (query) {
+                    send({ type: "find_in_page", query, backwards: false });
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    closeFindBar();
+                  } else if (event.key === "Enter") {
+                    event.preventDefault();
+                    findInPage(event.shiftKey);
+                  }
+                }}
+              />
+            </div>
+            <div class="find-actions">
+              <button
+                class="find-action"
+                type="button"
+                aria-label={t().findPrevious}
+                title={t().findPrevious}
+                disabled={!findQuery()}
+                onClick={() => findInPage(true)}
+              >
+                <ArrowLeft />
+              </button>
+              <button
+                class="find-action"
+                type="button"
+                aria-label={t().findNext}
+                title={t().findNext}
+                disabled={!findQuery()}
+                onClick={() => findInPage(false)}
+              >
+                <ArrowRight />
+              </button>
+              <button
+                class="find-action find-close"
+                type="button"
+                aria-label={t().closeFind}
+                title={t().closeFind}
+                onClick={closeFindBar}
+              >
+                <Close />
+              </button>
+            </div>
+          </form>
+        </Show>
 
         <div class="location-row">
           <button class="location-trigger" type="button" onClick={openLocation}>

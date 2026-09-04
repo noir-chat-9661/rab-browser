@@ -67,6 +67,7 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
     let type = null;
     if (primaryOnly && key === "t") type = "open_new_tab_prompt";
     else if (primaryOnly && key === "l") type = "open_location";
+    else if (primaryOnly && key === "f") type = "open_find_bar";
     else if (primaryOnly && key === "r" && !isNewTabUrl(location.href)) {
       type = "reload";
     }
@@ -352,6 +353,10 @@ impl WryEngine {
         {
             self.webview.set_visible(visible)
         }
+    }
+
+    pub fn evaluate_script(&self, script: &str) -> Result<(), wry::Error> {
+        self.webview.evaluate_script(script)
     }
 
     pub fn evaluate_script_with_callback(
