@@ -27,6 +27,11 @@ type Bookmark = {
   title: string;
 };
 
+type HistoryEntry = {
+  url: string;
+  title: string;
+};
+
 type SearchEngine = "google" | "duckduckgo" | "bing";
 type Theme = "dark" | "light";
 type FontSize = "small" | "medium" | "large";
@@ -53,6 +58,7 @@ type BrowserState = {
   tabs: Tab[];
   currentTabId: number | null;
   bookmarks: Bookmark[];
+  history: HistoryEntry[];
   mcpEnabled: boolean;
   mcpHttp: {
     enabled: boolean;
@@ -95,6 +101,7 @@ const emptyState: BrowserState = {
   tabs: [],
   currentTabId: null,
   bookmarks: [],
+  history: [],
   mcpEnabled: false,
   mcpHttp: {
     enabled: false,
@@ -155,6 +162,15 @@ function displayBookmarkTitle(bookmark: Bookmark) {
     return new URL(bookmark.url).hostname.replace(/^www\./, "") || bookmark.url;
   } catch {
     return bookmark.url;
+  }
+}
+
+function displayHistoryTitle(entry: HistoryEntry) {
+  if (entry.title.trim()) return entry.title;
+  try {
+    return new URL(entry.url).hostname.replace(/^www\./, "") || entry.url;
+  } catch {
+    return entry.url;
   }
 }
 
@@ -595,6 +611,9 @@ function App() {
     batch(() => {
       setState("tabs", reconcile(newState.tabs, { key: "id" }));
       setState("bookmarks", reconcile(newState.bookmarks, { key: "url" }));
+      // URLs can appear more than once in history, so replace the array
+      // instead of reconciling it with a URL key.
+      setState("history", newState.history);
       setState("currentTabId", newState.currentTabId);
       setState("mcpEnabled", newState.mcpEnabled);
       setState("mcpHttp", reconcile(newState.mcpHttp));
@@ -1287,6 +1306,47 @@ function App() {
                         <Cookie />
                       </button>
                     </div>
+                    <section class="history-section" aria-label={t().history}>
+                      <div class="history-section-header">
+                        <h3>{t().history}</h3>
+                        <span>{state.history.length.toString().padStart(3, "0")}</span>
+                      </div>
+                      <Show
+                        when={state.history.length > 0}
+                        fallback={<p class="history-empty">{t().emptyHistory}</p>}
+                      >
+                        <div class="history-list">
+                          <For each={state.history}>
+                            {(entry) => (
+                              <button
+                                class="history-entry"
+                                type="button"
+                                title={entry.url}
+                                aria-label={t().openHistoryEntry(
+                                  displayHistoryTitle(entry),
+                                )}
+                                onClick={() =>
+                                  send({
+                                    type: "select_history_entry",
+                                    url: entry.url,
+                                  })
+                                }
+                              >
+                                <span class="history-mark" aria-hidden="true">
+                                  <HistoryIcon />
+                                </span>
+                                <span class="history-copy">
+                                  <span class="history-title">
+                                    {displayHistoryTitle(entry)}
+                                  </span>
+                                  <span class="history-url">{entry.url}</span>
+                                </span>
+                              </button>
+                            )}
+                          </For>
+                        </div>
+                      </Show>
+                    </section>
                   </section>
                 </Show>
 
@@ -1636,6 +1696,14 @@ function Star() {
   return (
     <svg viewBox="0 0 20 20">
       <path d="m10 3 2.1 4.3 4.7.7-3.4 3.3.8 4.7-4.2-2.2L5.8 16l.8-4.7L3.2 8l4.7-.7L10 3Z" />
+    </svg>
+  );
+}
+
+function HistoryIcon() {
+  return (
+    <svg viewBox="0 0 20 20">
+      <path d="M5.3 6.3A6 6 0 1 0 6.4 4.7M5.3 3.5v2.8h2.8M10 6.8v3.5l2.3 1.4" />
     </svg>
   );
 }

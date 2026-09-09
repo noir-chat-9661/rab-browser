@@ -101,6 +101,9 @@ enum ChromeCommand {
     SelectBookmark {
         url: String,
     },
+    SelectHistoryEntry {
+        url: String,
+    },
     RemoveBookmark {
         url: String,
     },
@@ -158,6 +161,7 @@ struct ChromeState<'a> {
     tabs: Vec<ChromeTab<'a>>,
     current_tab_id: Option<u64>,
     bookmarks: Vec<ChromeBookmark<'a>>,
+    history: Vec<ChromeHistoryEntry<'a>>,
     mcp_enabled: bool,
     mcp_http: &'a McpHttpState,
     mcp_registration: &'a Option<McpRegistrationState>,
@@ -214,6 +218,13 @@ struct ChromeTab<'a> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ChromeBookmark<'a> {
+    url: &'a str,
+    title: &'a str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChromeHistoryEntry<'a> {
     url: &'a str,
     title: &'a str,
 }
@@ -894,11 +905,13 @@ fn update_history_flags(tabs: &mut TabManager, histories: &BTreeMap<TabId, TabHi
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn send_state(
     chrome: &WebView,
     tabs: &TabManager,
     views: &BTreeMap<TabId, WryEngine>,
     bookmarks: &BookmarkManager,
+    history: &HistoryManager,
     settings: &AppSettings,
     mcp_enabled: bool,
     mcp_http: &McpHttpState,
@@ -923,6 +936,14 @@ fn send_state(
             .map(|bookmark| ChromeBookmark {
                 url: &bookmark.url,
                 title: &bookmark.title,
+            })
+            .collect(),
+        history: history
+            .entries()
+            .rev()
+            .map(|entry| ChromeHistoryEntry {
+                url: &entry.url,
+                title: &entry.title,
             })
             .collect(),
         mcp_enabled,
@@ -1458,6 +1479,7 @@ fn handle_mcp_request(
     chrome: &WebView,
     tabs: &mut TabManager,
     bookmarks: &BookmarkManager,
+    history: &HistoryManager,
     settings: &AppSettings,
     views: &mut BTreeMap<TabId, WryEngine>,
     histories: &mut BTreeMap<TabId, TabHistory>,
@@ -1506,6 +1528,7 @@ fn handle_mcp_request(
                         tabs,
                         views,
                         bookmarks,
+                        history,
                         settings,
                         mcp_enabled,
                         mcp_http_state,
@@ -1545,6 +1568,7 @@ fn handle_mcp_request(
                 tabs,
                 views,
                 bookmarks,
+                history,
                 settings,
                 mcp_enabled,
                 mcp_http_state,
@@ -1574,6 +1598,7 @@ fn handle_mcp_request(
                     tabs,
                     views,
                     bookmarks,
+                    history,
                     settings,
                     mcp_enabled,
                     mcp_http_state,
@@ -1609,6 +1634,7 @@ fn handle_mcp_request(
                     tabs,
                     views,
                     bookmarks,
+                    history,
                     settings,
                     mcp_enabled,
                     mcp_http_state,
@@ -1629,6 +1655,7 @@ fn handle_mcp_request(
                         tabs,
                         views,
                         bookmarks,
+                        history,
                         settings,
                         mcp_enabled,
                         mcp_http_state,
@@ -1651,6 +1678,7 @@ fn handle_mcp_request(
                         tabs,
                         views,
                         bookmarks,
+                        history,
                         settings,
                         mcp_enabled,
                         mcp_http_state,
@@ -1956,6 +1984,7 @@ fn main() -> wry::Result<()> {
                 &chrome,
                 &mut tabs,
                 &bookmarks,
+                &history,
                 &settings,
                 &mut views,
                 &mut histories,
@@ -2016,6 +2045,7 @@ fn main() -> wry::Result<()> {
                         &tabs,
                         &views,
                         &bookmarks,
+                        &history,
                         &settings,
                         mcp_enabled,
                         &mcp_http_state,
@@ -2360,6 +2390,26 @@ fn main() -> wry::Result<()> {
                                 }
                             }
                         }
+                        ChromeCommand::SelectHistoryEntry { url } => {
+                            if add_tab(
+                                &window,
+                                &mut tabs,
+                                &mut views,
+                                &mut histories,
+                                &content_events_tx,
+                                &commands_tx,
+                                &current_theme,
+                                &mut last_active,
+                                &url,
+                                sidebar_visible,
+                                settings.search_engine,
+                            )
+                            .is_ok()
+                            {
+                                bring_chrome_to_front(&chrome);
+                                state_changed = true;
+                            }
+                        }
                         ChromeCommand::RemoveBookmark { url } => {
                             if bookmarks.remove(&url) {
                                 state_changed = true;
@@ -2367,6 +2417,7 @@ fn main() -> wry::Result<()> {
                         }
                         ChromeCommand::ClearHistory => {
                             history.clear();
+                            state_changed = true;
                         }
                         ChromeCommand::ClearCookies => {
                             // WKWebView instances share the default website data
@@ -2557,6 +2608,7 @@ fn main() -> wry::Result<()> {
                         &tabs,
                         &views,
                         &bookmarks,
+                        &history,
                         &settings,
                         mcp_enabled,
                         &mcp_http_state,
@@ -2688,6 +2740,7 @@ fn main() -> wry::Result<()> {
                                     &tabs,
                                     &views,
                                     &bookmarks,
+                                    &history,
                                     &settings,
                                     mcp_enabled,
                                     &mcp_http_state,
