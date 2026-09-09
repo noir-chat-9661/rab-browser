@@ -453,9 +453,25 @@ function App() {
     send({ type: "palette_closed" });
   };
 
+  // Tracks the last query actually sent to Rust: some browsers fire a
+  // plain input event right after compositionend for the same just-committed
+  // value, and without this the search would run twice for one keystroke.
+  let lastCommittedFindQuery = "";
+
+  const commitFindQuery = (query: string) => {
+    if (query === lastCommittedFindQuery) return;
+    lastCommittedFindQuery = query;
+    setFindQuery(query);
+    setFindFound(null);
+    if (query) {
+      send({ type: "find_in_page", query, backwards: false });
+    }
+  };
+
   const closeFindBar = () => {
     if (!findOpen()) return;
     setFindOpen(false);
+    lastCommittedFindQuery = "";
     setFindQuery("");
     setFindFound(null);
     send({ type: "close_find_bar" });
@@ -737,22 +753,20 @@ function App() {
                   // event is the only thing driving the field, which keeps
                   // IME composition untouched.
                   if (event.isComposing) return;
-                  const query = event.currentTarget.value;
-                  setFindQuery(query);
-                  setFindFound(null);
-                  if (query) {
-                    send({ type: "find_in_page", query, backwards: false });
-                  }
+                  commitFindQuery(event.currentTarget.value);
                 }}
                 onCompositionEnd={(event) => {
-                  const query = event.currentTarget.value;
-                  setFindQuery(query);
-                  setFindFound(null);
-                  if (query) {
-                    send({ type: "find_in_page", query, backwards: false });
-                  }
+                  // Some browsers fire a plain (non-composing) input event
+                  // right after compositionend for the same committed value
+                  // — commitFindQuery's dedupe (below) drops that repeat.
+                  commitFindQuery(event.currentTarget.value);
                 }}
                 onKeyDown={(event) => {
+                  // The Enter/Escape that confirms or cancels an IME
+                  // composition still fires a keydown with that key — acting
+                  // on it here would search a stale query or close the bar
+                  // instead of just letting the IME finish.
+                  if (event.isComposing) return;
                   if (event.key === "Escape") {
                     event.preventDefault();
                     closeFindBar();
