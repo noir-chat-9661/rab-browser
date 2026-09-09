@@ -783,6 +783,27 @@ function App() {
                   } else if (event.key === "Enter") {
                     event.preventDefault();
                     findInPage(event.shiftKey);
+                  } else if (
+                    (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
+                    !event.shiftKey
+                  ) {
+                    // Left/right at the start/end of this WKWebView-hosted
+                    // field can, instead of moving the caret, insert the
+                    // legacy ASCII control code for the arrow key itself
+                    // (0x1C/0x1D) as literal text (issue #125) — move the
+                    // caret in JS instead of trusting the native key handling.
+                    event.preventDefault();
+                    const field = event.currentTarget;
+                    const start = field.selectionStart ?? field.value.length;
+                    const end = field.selectionEnd ?? field.value.length;
+                    const pos =
+                      event.key === "ArrowLeft"
+                        ? Math.max(0, (start === end ? start : Math.min(start, end)) - 1)
+                        : Math.min(
+                            field.value.length,
+                            (start === end ? start : Math.max(start, end)) + 1,
+                          );
+                    field.setSelectionRange(pos, pos);
                   }
                 }}
               />
