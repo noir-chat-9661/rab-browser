@@ -474,6 +474,11 @@ function App() {
     lastCommittedFindQuery = "";
     setFindQuery("");
     setFindFound(null);
+    // Blur before hiding: a still-focused input can leave the IME's marked
+    // (uncommitted) text hanging around in the input's native text-input
+    // context even after its DOM value is cleared, so it resurfaces the
+    // next time the bar opens and something (e.g. an arrow key) commits it.
+    findInput?.blur();
     send({ type: "close_find_bar" });
   };
 
@@ -741,6 +746,11 @@ function App() {
                 title={findFound() === false ? t().findNoResults : undefined}
                 autocomplete="off"
                 autocapitalize="off"
+                // WebKit-only: disables WKWebView's own predictive-text
+                // suggestions, the likely source of stray characters landing
+                // in an untouched field when an arrow key is pressed at the
+                // start/end of the (empty) value.
+                autocorrect="off"
                 spellcheck={false}
                 placeholder={t().findPlaceholder}
                 onInput={(event) => {
@@ -773,6 +783,31 @@ function App() {
                   } else if (event.key === "Enter") {
                     event.preventDefault();
                     findInPage(event.shiftKey);
+                  } else if (
+                    (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
+                    !event.shiftKey
+                  ) {
+                    // Left/right at the start/end of this WKWebView-hosted
+                    // field can, instead of moving the caret, insert the
+                    // legacy ASCII control code for the arrow key itself
+                    // (0x1C/0x1D) as literal text (issue #125) — move the
+                    // caret in JS instead of trusting the native key handling.
+                    event.preventDefault();
+                    const field = event.currentTarget;
+                    const start = field.selectionStart ?? field.value.length;
+                    const end = field.selectionEnd ?? field.value.length;
+                    // Matches native behavior: with an active selection,
+                    // arrow keys collapse it to the near edge rather than
+                    // also stepping one character further.
+                    const pos =
+                      start !== end
+                        ? event.key === "ArrowLeft"
+                          ? Math.min(start, end)
+                          : Math.max(start, end)
+                        : event.key === "ArrowLeft"
+                          ? Math.max(0, start - 1)
+                          : Math.min(field.value.length, end + 1);
+                    field.setSelectionRange(pos, pos);
                   }
                 }}
               />
