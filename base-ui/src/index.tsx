@@ -796,13 +796,17 @@ function App() {
                     const field = event.currentTarget;
                     const start = field.selectionStart ?? field.value.length;
                     const end = field.selectionEnd ?? field.value.length;
+                    // Matches native behavior: with an active selection,
+                    // arrow keys collapse it to the near edge rather than
+                    // also stepping one character further.
                     const pos =
-                      event.key === "ArrowLeft"
-                        ? Math.max(0, (start === end ? start : Math.min(start, end)) - 1)
-                        : Math.min(
-                            field.value.length,
-                            (start === end ? start : Math.max(start, end)) + 1,
-                          );
+                      start !== end
+                        ? event.key === "ArrowLeft"
+                          ? Math.min(start, end)
+                          : Math.max(start, end)
+                        : event.key === "ArrowLeft"
+                          ? Math.max(0, start - 1)
+                          : Math.min(field.value.length, end + 1);
                     field.setSelectionRange(pos, pos);
                   }
                 }}
