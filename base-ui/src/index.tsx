@@ -474,6 +474,11 @@ function App() {
     lastCommittedFindQuery = "";
     setFindQuery("");
     setFindFound(null);
+    // Blur before hiding: a still-focused input can leave the IME's marked
+    // (uncommitted) text hanging around in the input's native text-input
+    // context even after its DOM value is cleared, so it resurfaces the
+    // next time the bar opens and something (e.g. an arrow key) commits it.
+    findInput?.blur();
     send({ type: "close_find_bar" });
   };
 
@@ -741,6 +746,11 @@ function App() {
                 title={findFound() === false ? t().findNoResults : undefined}
                 autocomplete="off"
                 autocapitalize="off"
+                // WebKit-only: disables WKWebView's own predictive-text
+                // suggestions, the likely source of stray characters landing
+                // in an untouched field when an arrow key is pressed at the
+                // start/end of the (empty) value.
+                autocorrect="off"
                 spellcheck={false}
                 placeholder={t().findPlaceholder}
                 onInput={(event) => {
