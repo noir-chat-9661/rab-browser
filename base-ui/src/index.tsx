@@ -453,9 +453,25 @@ function App() {
     send({ type: "palette_closed" });
   };
 
+  // Tracks the last query actually sent to Rust: some browsers fire a
+  // plain input event right after compositionend for the same just-committed
+  // value, and without this the search would run twice for one keystroke.
+  let lastCommittedFindQuery = "";
+
+  const commitFindQuery = (query: string) => {
+    if (query === lastCommittedFindQuery) return;
+    lastCommittedFindQuery = query;
+    setFindQuery(query);
+    setFindFound(null);
+    if (query) {
+      send({ type: "find_in_page", query, backwards: false });
+    }
+  };
+
   const closeFindBar = () => {
     if (!findOpen()) return;
     setFindOpen(false);
+    lastCommittedFindQuery = "";
     setFindQuery("");
     setFindFound(null);
     send({ type: "close_find_bar" });
@@ -522,6 +538,7 @@ function App() {
     if (!wasOpen) {
       setFindQuery("");
       setFindFound(null);
+      if (findInput) findInput.value = "";
     }
     queueMicrotask(() => {
       findInput?.focus();
@@ -720,7 +737,6 @@ function App() {
               <input
                 ref={findInput}
                 id="find-input"
-                value={findQuery()}
                 aria-invalid={findFound() === false}
                 title={findFound() === false ? t().findNoResults : undefined}
                 autocomplete="off"
@@ -728,14 +744,29 @@ function App() {
                 spellcheck={false}
                 placeholder={t().findPlaceholder}
                 onInput={(event) => {
-                  const query = event.currentTarget.value;
-                  setFindQuery(query);
-                  setFindFound(null);
-                  if (query) {
-                    send({ type: "find_in_page", query, backwards: false });
-                  }
+                  // Skip mid-composition input events: committing every
+                  // keystroke here re-renders the JSX-bound value below,
+                  // which would otherwise fight IME composition (e.g. arrow
+                  // keys used to move the conversion range while typing
+                  // Japanese) and corrupt what's on screen. There is no
+                  // JSX-bound value here precisely so this native input
+                  // event is the only thing driving the field, which keeps
+                  // IME composition untouched.
+                  if (event.isComposing) return;
+                  commitFindQuery(event.currentTarget.value);
+                }}
+                onCompositionEnd={(event) => {
+                  // Some browsers fire a plain (non-composing) input event
+                  // right after compositionend for the same committed value
+                  // — commitFindQuery's dedupe (below) drops that repeat.
+                  commitFindQuery(event.currentTarget.value);
                 }}
                 onKeyDown={(event) => {
+                  // The Enter/Escape that confirms or cancels an IME
+                  // composition still fires a keydown with that key — acting
+                  // on it here would search a stale query or close the bar
+                  // instead of just letting the IME finish.
+                  if (event.isComposing) return;
                   if (event.key === "Escape") {
                     event.preventDefault();
                     closeFindBar();
