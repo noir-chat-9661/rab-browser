@@ -156,21 +156,14 @@ function displayTitle(tab: Tab, newTabTitle: string) {
   }
 }
 
-function displayBookmarkTitle(bookmark: Bookmark) {
-  if (bookmark.title.trim()) return bookmark.title;
+// Bookmark and HistoryEntry are both {url, title} — one fallback covers
+// both: fall back to the hostname, and to the raw URL if that fails too.
+function displayUrlTitle({ url, title }: Bookmark | HistoryEntry) {
+  if (title.trim()) return title;
   try {
-    return new URL(bookmark.url).hostname.replace(/^www\./, "") || bookmark.url;
+    return new URL(url).hostname.replace(/^www\./, "") || url;
   } catch {
-    return bookmark.url;
-  }
-}
-
-function displayHistoryTitle(entry: HistoryEntry) {
-  if (entry.title.trim()) return entry.title;
-  try {
-    return new URL(entry.url).hostname.replace(/^www\./, "") || entry.url;
-  } catch {
-    return entry.url;
+    return url;
   }
 }
 
@@ -611,9 +604,11 @@ function App() {
     batch(() => {
       setState("tabs", reconcile(newState.tabs, { key: "id" }));
       setState("bookmarks", reconcile(newState.bookmarks, { key: "url" }));
-      // URLs can appear more than once in history, so replace the array
-      // instead of reconciling it with a URL key.
-      setState("history", newState.history);
+      // URLs can appear more than once in history, so this can't use a
+      // `key` like bookmarks/tabs — but the keyless form still diffs by
+      // index instead of replacing the whole array, so unchanged rows keep
+      // their DOM nodes across a plain history-list refresh.
+      setState("history", reconcile(newState.history));
       setState("currentTabId", newState.currentTabId);
       setState("mcpEnabled", newState.mcpEnabled);
       setState("mcpHttp", reconcile(newState.mcpHttp));
@@ -985,7 +980,7 @@ function App() {
                     <span class="bookmark-mark"><Star /></span>
                     <span class="bookmark-copy">
                       <span class="bookmark-title">
-                        {displayBookmarkTitle(bookmark)}
+                        {displayUrlTitle(bookmark)}
                       </span>
                       <span class="bookmark-url">{bookmark.url}</span>
                     </span>
@@ -993,7 +988,7 @@ function App() {
                       class="bookmark-remove"
                       role="button"
                       tabindex="0"
-                      aria-label={t().removeBookmark(displayBookmarkTitle(bookmark))}
+                      aria-label={t().removeBookmark(displayUrlTitle(bookmark))}
                       onClick={(event) => {
                         event.stopPropagation();
                         send({ type: "remove_bookmark", url: bookmark.url });
@@ -1323,7 +1318,7 @@ function App() {
                                 type="button"
                                 title={entry.url}
                                 aria-label={t().openHistoryEntry(
-                                  displayHistoryTitle(entry),
+                                  displayUrlTitle(entry),
                                 )}
                                 onClick={() =>
                                   send({
@@ -1337,7 +1332,7 @@ function App() {
                                 </span>
                                 <span class="history-copy">
                                   <span class="history-title">
-                                    {displayHistoryTitle(entry)}
+                                    {displayUrlTitle(entry)}
                                   </span>
                                   <span class="history-url">{entry.url}</span>
                                 </span>

@@ -2390,24 +2390,30 @@ fn main() -> wry::Result<()> {
                                 }
                             }
                         }
+                        // Matches ChromeCommand::SelectBookmark: navigates
+                        // the current tab rather than opening a new one, for
+                        // the same reason bookmarks do — clicking a saved
+                        // destination should go there, not spawn a tab.
                         ChromeCommand::SelectHistoryEntry { url } => {
-                            if add_tab(
-                                &window,
-                                &mut tabs,
-                                &mut views,
-                                &mut histories,
-                                &content_events_tx,
-                                &commands_tx,
-                                &current_theme,
-                                &mut last_active,
-                                &url,
-                                sidebar_visible,
-                                settings.search_engine,
-                            )
-                            .is_ok()
-                            {
-                                bring_chrome_to_front(&chrome);
-                                state_changed = true;
+                            if let Some(id) = tabs.current_id() {
+                                let url = normalize_url(&url, settings.search_engine);
+                                let leaving_new_tab =
+                                    tabs.tab(id).is_some_and(|tab| is_new_tab_url(&tab.url));
+                                let navigated = views.get_mut(&id).is_some_and(|view| {
+                                    if leaving_new_tab {
+                                        view.navigate_replacing(&url)
+                                    } else {
+                                        view.navigate(&url)
+                                    }
+                                    .is_ok()
+                                });
+                                if navigated {
+                                    if let Some(tab) = tabs.tab_mut(id) {
+                                        tab.url = url;
+                                        tab.favicon_url = None;
+                                    }
+                                    state_changed = true;
+                                }
                             }
                         }
                         ChromeCommand::RemoveBookmark { url } => {
