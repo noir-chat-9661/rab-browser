@@ -522,6 +522,7 @@ function App() {
     if (!wasOpen) {
       setFindQuery("");
       setFindFound(null);
+      if (findInput) findInput.value = "";
     }
     queueMicrotask(() => {
       findInput?.focus();
@@ -720,7 +721,6 @@ function App() {
               <input
                 ref={findInput}
                 id="find-input"
-                value={findQuery()}
                 aria-invalid={findFound() === false}
                 title={findFound() === false ? t().findNoResults : undefined}
                 autocomplete="off"
@@ -728,6 +728,23 @@ function App() {
                 spellcheck={false}
                 placeholder={t().findPlaceholder}
                 onInput={(event) => {
+                  // Skip mid-composition input events: committing every
+                  // keystroke here re-renders the JSX-bound value below,
+                  // which would otherwise fight IME composition (e.g. arrow
+                  // keys used to move the conversion range while typing
+                  // Japanese) and corrupt what's on screen. There is no
+                  // JSX-bound value here precisely so this native input
+                  // event is the only thing driving the field, which keeps
+                  // IME composition untouched.
+                  if (event.isComposing) return;
+                  const query = event.currentTarget.value;
+                  setFindQuery(query);
+                  setFindFound(null);
+                  if (query) {
+                    send({ type: "find_in_page", query, backwards: false });
+                  }
+                }}
+                onCompositionEnd={(event) => {
                   const query = event.currentTarget.value;
                   setFindQuery(query);
                   setFindFound(null);
