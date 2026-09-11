@@ -923,6 +923,11 @@ fn select_content_view(
         let _ = view.set_visible(false);
     }
     if let Some(view) = views.get(&id) {
+        // `apply_layout` only resizes the view that is on screen, so this one
+        // may still carry the bounds it had when it was last visible — the
+        // window or the sidebar can have changed size since. Re-apply them
+        // before showing it, otherwise it appears at the stale size.
+        let _ = view.set_content_bounds(window, content_bounds(window, sidebar_visible));
         let _ = view.set_visible(true);
         let _ = view.focus();
     }
@@ -1201,16 +1206,26 @@ enum CloseTabResult {
     CreatedReplacement,
 }
 
+/// `current` is the tab whose content view is actually on screen.
+///
+/// Only that view is resized here. Every other view is hidden, so resizing it
+/// buys nothing visible and is far from free on Windows: WebView2's
+/// `SetBounds` is a synchronous call that forces a Chromium layout pass per
+/// view, so the old "resize every live view" loop cost main-thread time
+/// proportional to the number of open tabs — on every palette open/close and
+/// on every `WindowEvent::Resized`, i.e. once per frame while the window is
+/// being dragged. Hidden views instead pick the current bounds up in
+/// `select_content_view`, right before they are shown.
 fn apply_layout(
     window: &Window,
     chrome: &WebView,
     views: &BTreeMap<TabId, WryEngine>,
     sidebar_visible: bool,
     palette_open: bool,
+    current: Option<TabId>,
 ) {
-    let content_rect = content_bounds(window, sidebar_visible);
-    for view in views.values() {
-        let _ = view.set_content_bounds(window, content_rect);
+    if let Some(view) = current.and_then(|id| views.get(&id)) {
+        let _ = view.set_content_bounds(window, content_bounds(window, sidebar_visible));
     }
 
     let chrome_visible = sidebar_visible || palette_open;
@@ -2098,6 +2113,10 @@ fn main() -> wry::Result<()> {
             let _ = chrome_commands_tx.send(request.into_body());
         })
         .build_as_child(&window)?;
+    // Off macOS this is a `()`-returning stub, which clippy flags as a unit
+    // let-binding; the binding still has to exist because on macOS it holds
+    // the delegate alive for as long as the chrome WebView is used.
+    #[cfg_attr(not(target_os = "macos"), allow(clippy::let_unit_value))]
     let _chrome_ui_delegate = browser_engine_wry::install_js_dialog_delegate(&chrome);
     chrome.set_bounds(chrome_bounds(&window))?;
 
@@ -2303,6 +2322,7 @@ fn main() -> wry::Result<()> {
                                     &views,
                                     sidebar_visible,
                                     palette_open,
+                                    tabs.current_id(),
                                 );
                                 let _ = chrome
                                     .evaluate_script("window.rabChrome?.closeLocation?.();");
@@ -2383,7 +2403,14 @@ fn main() -> wry::Result<()> {
                         }
                         ChromeCommand::OpenFindBar => {
                             open_find_bar(&window, &chrome, &mut sidebar_visible);
-                            apply_layout(&window, &chrome, &views, sidebar_visible, palette_open);
+                            apply_layout(
+                                &window,
+                                &chrome,
+                                &views,
+                                sidebar_visible,
+                                palette_open,
+                                tabs.current_id(),
+                            );
                         }
                         ChromeCommand::FindInPage { query, backwards } => {
                             // Bumping the sequence on every call (even the
@@ -2494,7 +2521,14 @@ fn main() -> wry::Result<()> {
                         }
                         ChromeCommand::ToggleSidebar => {
                             sidebar_visible = !sidebar_visible;
-                            apply_layout(&window, &chrome, &views, sidebar_visible, palette_open);
+                            apply_layout(
+                                &window,
+                                &chrome,
+                                &views,
+                                sidebar_visible,
+                                palette_open,
+                                tabs.current_id(),
+                            );
                             if sidebar_visible || palette_open {
                                 bring_chrome_to_front(&chrome);
                             } else if let Some(view) =
@@ -2722,13 +2756,27 @@ fn main() -> wry::Result<()> {
                         }
                         ChromeCommand::PaletteOpened => {
                             palette_open = true;
-                            apply_layout(&window, &chrome, &views, sidebar_visible, palette_open);
+                            apply_layout(
+                                &window,
+                                &chrome,
+                                &views,
+                                sidebar_visible,
+                                palette_open,
+                                tabs.current_id(),
+                            );
                             bring_chrome_to_front(&chrome);
                             let _ = chrome.focus();
                         }
                         ChromeCommand::PaletteClosed => {
                             palette_open = false;
-                            apply_layout(&window, &chrome, &views, sidebar_visible, palette_open);
+                            apply_layout(
+                                &window,
+                                &chrome,
+                                &views,
+                                sidebar_visible,
+                                palette_open,
+                                tabs.current_id(),
+                            );
                             if let Some(view) = tabs.current_id().and_then(|id| views.get(&id)) {
                                 let _ = view.focus();
                             }
@@ -2771,7 +2819,14 @@ fn main() -> wry::Result<()> {
             }
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::Resized(_) => {
-                    apply_layout(&window, &chrome, &views, sidebar_visible, palette_open);
+                    apply_layout(
+                                &window,
+                                &chrome,
+                                &views,
+                                sidebar_visible,
+                                palette_open,
+                                tabs.current_id(),
+                            );
                 }
                 WindowEvent::ModifiersChanged(state) => modifiers = state,
                 WindowEvent::KeyboardInput { event, .. }
@@ -2795,7 +2850,14 @@ fn main() -> wry::Result<()> {
                         }
                         KeyCode::KeyF => {
                             open_find_bar(&window, &chrome, &mut sidebar_visible);
-                            apply_layout(&window, &chrome, &views, sidebar_visible, palette_open);
+                            apply_layout(
+                                &window,
+                                &chrome,
+                                &views,
+                                sidebar_visible,
+                                palette_open,
+                                tabs.current_id(),
+                            );
                         }
                         KeyCode::KeyR => {
                             if !current_tab_is_new(&tabs)
@@ -2853,7 +2915,14 @@ fn main() -> wry::Result<()> {
                                 } =>
                         {
                             sidebar_visible = !sidebar_visible;
-                            apply_layout(&window, &chrome, &views, sidebar_visible, palette_open);
+                            apply_layout(
+                                &window,
+                                &chrome,
+                                &views,
+                                sidebar_visible,
+                                palette_open,
+                                tabs.current_id(),
+                            );
                             if sidebar_visible || palette_open {
                                 bring_chrome_to_front(&chrome);
                             } else if let Some(view) =
@@ -2875,6 +2944,7 @@ fn main() -> wry::Result<()> {
                                     &views,
                                     sidebar_visible,
                                     palette_open,
+                                    tabs.current_id(),
                                 );
                                 let _ = chrome
                                     .evaluate_script("window.rabChrome?.closeLocation?.();");
