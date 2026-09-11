@@ -137,6 +137,16 @@ enum ChromeCommand {
     MediaPlaybackChanged {
         playing: bool,
     },
+    // Content-side counterpart to WebView2's native `DocumentTitleChanged`
+    // (see `create_content_view`'s `title_tx`), observed on Windows to
+    // sometimes not fire, or to fire too early — before the new page's
+    // `<title>` has actually been parsed — for an in-tab navigation. This
+    // one comes from a `MutationObserver` on the page's own `<head>` (same
+    // pattern as `FaviconChanged` below), so it can't race the DOM it's
+    // reading.
+    ContentTitleChanged {
+        title: String,
+    },
     OpenDevtools,
     OpenMcpHelp,
     OpenSettings,
@@ -713,6 +723,7 @@ fn resolve_tab_id(tabs: &TabManager, raw_id: u64) -> Option<TabId> {
         .map(|tab| tab.id)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_content_view(
     window: &Window,
     id: TabId,
@@ -721,11 +732,15 @@ fn create_content_view(
     events_tx: &Sender<ContentEvent>,
     commands_tx: &Sender<String>,
     theme: &Arc<Mutex<Theme>>,
+    event_loop_proxy: &EventLoopProxy<McpRequest>,
 ) -> wry::Result<WryEngine> {
     let title_tx = events_tx.clone();
+    let title_wake = event_loop_proxy.clone();
     let load_tx = events_tx.clone();
+    let load_wake = event_loop_proxy.clone();
     let ipc_events_tx = events_tx.clone();
     let content_commands_tx = commands_tx.clone();
+    let content_ipc_wake = event_loop_proxy.clone();
     let internal_page_theme = Arc::clone(theme);
     let bounds = content_bounds(window, sidebar_visible);
     let view = WryEngine::new_with_handlers_and_bounds_and_protocol(
@@ -734,25 +749,42 @@ fn create_content_view(
         Some(bounds),
         *theme.lock().unwrap(),
         move |title| {
-            let _ = title_tx.send(ContentEvent::TitleChanged { id, title });
+            if title_tx
+                .send(ContentEvent::TitleChanged { id, title })
+                .is_ok()
+            {
+                let _ = title_wake.send_event(McpRequest::Wake);
+            }
         },
         move |event, url| {
-            if matches!(event, PageLoadEvent::Finished) {
-                let _ = load_tx.send(ContentEvent::PageLoaded { id, url });
+            if matches!(event, PageLoadEvent::Finished)
+                && load_tx.send(ContentEvent::PageLoaded { id, url }).is_ok()
+            {
+                let _ = load_wake.send_event(McpRequest::Wake);
             }
         },
         move |request: Request<String>| {
             let body = request.into_body();
-            match serde_json::from_str::<ChromeCommand>(&body) {
-                Ok(ChromeCommand::FaviconChanged { url }) => {
-                    let _ = ipc_events_tx.send(ContentEvent::FaviconChanged { id, url });
-                }
-                Ok(ChromeCommand::MediaPlaybackChanged { playing }) => {
-                    let _ = ipc_events_tx.send(ContentEvent::MediaPlaybackChanged { id, playing });
-                }
-                _ => {
-                    let _ = content_commands_tx.send(body);
-                }
+            // `commands_tx`/`events_tx` sends from a WebView2 IPC callback
+            // don't otherwise wake `ControlFlow::Wait` on their own — see
+            // the wake right after chrome's own `with_ipc_handler` in
+            // `main` for the full explanation. Every send below needs the
+            // same treatment, or a message from a content tab can sit
+            // unprocessed until some unrelated event wakes the loop.
+            let sent = match serde_json::from_str::<ChromeCommand>(&body) {
+                Ok(ChromeCommand::FaviconChanged { url }) => ipc_events_tx
+                    .send(ContentEvent::FaviconChanged { id, url })
+                    .is_ok(),
+                Ok(ChromeCommand::MediaPlaybackChanged { playing }) => ipc_events_tx
+                    .send(ContentEvent::MediaPlaybackChanged { id, playing })
+                    .is_ok(),
+                Ok(ChromeCommand::ContentTitleChanged { title }) => ipc_events_tx
+                    .send(ContentEvent::TitleChanged { id, title })
+                    .is_ok(),
+                _ => content_commands_tx.send(body).is_ok(),
+            };
+            if sent {
+                let _ = content_ipc_wake.send_event(McpRequest::Wake);
             }
         },
         INTERNAL_PROTOCOL,
@@ -818,6 +850,53 @@ fn bring_chrome_to_front(chrome: &WebView) {
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn bring_chrome_to_front(_chrome: &WebView) {}
 
+/// Forces WebView2 to actually repaint after its bounds change.
+///
+/// `WebView::set_bounds` on Windows resolves to WebView2's
+/// `ICoreWebView2Controller::SetBounds`, which is observed on real hardware
+/// to update the control's hit-testable/DOM geometry (confirmed correct via
+/// `window.innerWidth` and `getBoundingClientRect()` right after the call)
+/// without reliably repainting the newly-exposed area: e.g. growing the
+/// chrome view from the sidebar's width to the full window to show the
+/// command palette can leave everything right of the old sidebar edge
+/// showing whatever was last painted there (nothing, in the palette's case),
+/// even though the palette is, per the DOM, already laid out correctly
+/// across the full width. `RedrawWindow` with `RDW_INVALIDATE |
+/// RDW_UPDATENOW` forces an immediate synchronous repaint of the whole
+/// growed area instead of waiting on whatever triggers WebView2's own next
+/// paint (observed to sometimes never happen without further input).
+#[cfg(target_os = "windows")]
+fn force_repaint(view: &WebView) {
+    use windows::Win32::Graphics::Gdi::{
+        RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow,
+    };
+    use wry::WebViewExtWindows;
+
+    let hwnd = view.hwnd();
+    // SAFETY: `hwnd` is the live HWND WebViewExtWindows::hwnd() just
+    // returned for `view`, which outlives this call; RedrawWindow doesn't
+    // retain the handle past the call.
+    unsafe {
+        let _ = RedrawWindow(
+            Some(hwnd),
+            None,
+            None,
+            RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN,
+        );
+    }
+}
+
+/// Sets a WebView's bounds and, on Windows, forces it to actually repaint
+/// afterward (see `force_repaint`). Every `set_bounds` call on `chrome` goes
+/// through this rather than `WebView::set_bounds` directly, since any of
+/// them can grow the view into an area that was never painted before.
+fn set_bounds_and_repaint(view: &WebView, bounds: Rect) -> wry::Result<()> {
+    view.set_bounds(bounds)?;
+    #[cfg(target_os = "windows")]
+    force_repaint(view);
+    Ok(())
+}
+
 /// Recreates a suspended tab's WKWebView on demand (navigated back to its
 /// last known URL) if it doesn't already have one. Used both when the user
 /// switches to a tab and when MCP targets a backgrounded tab directly.
@@ -832,6 +911,7 @@ fn ensure_content_view(
     sidebar_visible: bool,
     last_active: &mut BTreeMap<TabId, Instant>,
     id: TabId,
+    event_loop_proxy: &EventLoopProxy<McpRequest>,
 ) -> bool {
     if views.contains_key(&id) {
         return true;
@@ -847,6 +927,7 @@ fn ensure_content_view(
         events_tx,
         commands_tx,
         theme,
+        event_loop_proxy,
     ) else {
         return false;
     };
@@ -874,6 +955,7 @@ fn select_content_view(
     last_active: &mut BTreeMap<TabId, Instant>,
     previous: Option<TabId>,
     id: TabId,
+    event_loop_proxy: &EventLoopProxy<McpRequest>,
 ) {
     if tabs.tab(id).is_none() {
         return;
@@ -901,6 +983,7 @@ fn select_content_view(
         sidebar_visible,
         last_active,
         id,
+        event_loop_proxy,
     ) {
         return;
     }
@@ -1095,6 +1178,7 @@ fn add_tab(
     url: &str,
     sidebar_visible: bool,
     search_engine: SearchEngine,
+    event_loop_proxy: &EventLoopProxy<McpRequest>,
 ) -> wry::Result<TabId> {
     let url = normalize_url(url, search_engine);
     let previous = tabs.current_id();
@@ -1107,6 +1191,7 @@ fn add_tab(
         events_tx,
         commands_tx,
         theme,
+        event_loop_proxy,
     ) {
         Ok(view) => {
             histories.insert(id, TabHistory::new(url));
@@ -1122,6 +1207,7 @@ fn add_tab(
                 last_active,
                 previous,
                 id,
+                event_loop_proxy,
             );
             Ok(id)
         }
@@ -1146,6 +1232,7 @@ fn close_tab(
     id: TabId,
     sidebar_visible: bool,
     search_engine: SearchEngine,
+    event_loop_proxy: &EventLoopProxy<McpRequest>,
 ) -> CloseTabResult {
     if is_only_new_tab(tabs, id) {
         return CloseTabResult::Ignored;
@@ -1175,6 +1262,7 @@ fn close_tab(
             NEW_TAB_URL,
             sidebar_visible,
             search_engine,
+            event_loop_proxy,
         )
         .is_ok()
         {
@@ -1194,6 +1282,7 @@ fn close_tab(
             last_active,
             previous,
             current,
+            event_loop_proxy,
         );
     }
     CloseTabResult::Closed
@@ -1234,7 +1323,7 @@ fn apply_layout(
     } else {
         chrome_bounds(window)
     };
-    let _ = chrome.set_bounds(chrome_rect);
+    let _ = set_bounds_and_repaint(chrome, chrome_rect);
     let _ = chrome.set_visible(chrome_visible);
 }
 
@@ -1247,7 +1336,7 @@ fn focus_location(
     *palette_open = true;
     *new_tab_prompt_open = false;
     let _ = chrome.set_visible(true);
-    let _ = chrome.set_bounds(full_window_bounds(window));
+    let _ = set_bounds_and_repaint(chrome, full_window_bounds(window));
     bring_chrome_to_front(chrome);
     let _ = chrome.focus();
     let _ = chrome.evaluate_script("window.rabChrome?.openLocation();");
@@ -1269,7 +1358,7 @@ fn focus_new_tab_prompt(
     *palette_open = true;
     *new_tab_prompt_open = true;
     let _ = chrome.set_visible(true);
-    let _ = chrome.set_bounds(full_window_bounds(window));
+    let _ = set_bounds_and_repaint(chrome, full_window_bounds(window));
     bring_chrome_to_front(chrome);
     let _ = chrome.focus();
     let _ = chrome.evaluate_script("window.rabChrome?.openNewTabPrompt();");
@@ -1280,7 +1369,7 @@ fn open_find_bar(window: &Window, chrome: &WebView, sidebar_visible: &mut bool) 
     // visible when the page currently occupies the full window.
     *sidebar_visible = true;
     let _ = chrome.set_visible(true);
-    let _ = chrome.set_bounds(chrome_bounds(window));
+    let _ = set_bounds_and_repaint(chrome, chrome_bounds(window));
     bring_chrome_to_front(chrome);
     let _ = chrome.focus();
     let _ = chrome.evaluate_script("window.rabChrome?.openFindBar(true);");
@@ -1325,7 +1414,7 @@ fn send_find_result(chrome: &WebView, query: &str, found: bool) {
 fn open_settings(window: &Window, chrome: &WebView, palette_open: &mut bool) {
     *palette_open = true;
     let _ = chrome.set_visible(true);
-    let _ = chrome.set_bounds(full_window_bounds(window));
+    let _ = set_bounds_and_repaint(chrome, full_window_bounds(window));
     bring_chrome_to_front(chrome);
     let _ = chrome.focus();
     let _ = chrome.evaluate_script("window.rabChrome?.openSettings();");
@@ -1334,7 +1423,7 @@ fn open_settings(window: &Window, chrome: &WebView, palette_open: &mut bool) {
 fn open_mcp_help(window: &Window, chrome: &WebView, palette_open: &mut bool) {
     *palette_open = true;
     let _ = chrome.set_visible(true);
-    let _ = chrome.set_bounds(full_window_bounds(window));
+    let _ = set_bounds_and_repaint(chrome, full_window_bounds(window));
     bring_chrome_to_front(chrome);
     let _ = chrome.focus();
     let _ = chrome.evaluate_script("window.rabChrome?.openMcpHelp();");
@@ -1621,6 +1710,7 @@ fn handle_mcp_request(
     sidebar_visible: bool,
     mcp_enabled: bool,
     mcp_http_state: &McpHttpState,
+    event_loop_proxy: &EventLoopProxy<McpRequest>,
 ) {
     match request {
         McpRequest::Wake => {}
@@ -1650,6 +1740,7 @@ fn handle_mcp_request(
                 url.as_deref().unwrap_or(NEW_TAB_URL),
                 sidebar_visible,
                 settings.search_engine,
+                event_loop_proxy,
             ) {
                 Ok(id) => {
                     bring_chrome_to_front(chrome);
@@ -1689,6 +1780,7 @@ fn handle_mcp_request(
                 id,
                 sidebar_visible,
                 settings.search_engine,
+                event_loop_proxy,
             );
             if result == CloseTabResult::CreatedReplacement {
                 bring_chrome_to_front(chrome);
@@ -1719,6 +1811,7 @@ fn handle_mcp_request(
                     last_active,
                     previous,
                     id,
+                    event_loop_proxy,
                 );
                 true
             });
@@ -1861,6 +1954,7 @@ fn handle_mcp_request(
                 sidebar_visible,
                 last_active,
                 id,
+                event_loop_proxy,
             ) {
                 let _ = reply.send(Err("target tab has no content view".to_owned()));
                 return;
@@ -2022,6 +2116,12 @@ fn main() -> wry::Result<()> {
         menu
     };
     let event_loop = event_loop_builder.build();
+    // Passed to every `add_tab`/`select_content_view`/`ensure_content_view`
+    // call so the content view they create can wake `ControlFlow::Wait` from
+    // its own IPC/title/page-load callbacks (see `create_content_view`) —
+    // without it, a message from a content tab can sit unprocessed in its
+    // channel until some unrelated event happens to wake the loop.
+    let content_wake_proxy = event_loop.create_proxy();
 
     // Start the control socket as early as possible — right after the
     // event loop exists (all `dispatcher` needs) and before the
@@ -2102,15 +2202,30 @@ fn main() -> wry::Result<()> {
         &initial_url,
         sidebar_visible,
         settings.search_engine,
+        &content_wake_proxy,
     )?;
 
     let chrome_commands_tx = commands_tx.clone();
+    // `commands_tx` alone doesn't wake the event loop: with `ControlFlow::Wait`,
+    // a message pushed here from WebView2's IPC callback is invisible to
+    // `Event::MainEventsCleared` until some unrelated event (a keypress, a
+    // resize) happens to wake the loop first. Most of the time something
+    // else is already keeping the loop busy enough that this goes unnoticed,
+    // but right after startup — chrome's very first `chrome_ready`, or an
+    // auto-opened palette's `palette_opened` — nothing else may fire for
+    // seconds, so the message (and the tab-bar/palette update it should
+    // trigger) sits stuck until the user happens to touch the window.
+    // `send_event(McpRequest::Wake)` is a plain no-op event (see its match
+    // arm below); its only job is to wake `ControlFlow::Wait` immediately.
+    let chrome_wake_proxy = event_loop.create_proxy();
     let chrome = WebViewBuilder::new()
         .with_html(CHROME_HTML)
         .with_transparent(true)
         .with_devtools(true)
         .with_ipc_handler(move |request: Request<String>| {
-            let _ = chrome_commands_tx.send(request.into_body());
+            if chrome_commands_tx.send(request.into_body()).is_ok() {
+                let _ = chrome_wake_proxy.send_event(McpRequest::Wake);
+            }
         })
         .build_as_child(&window)?;
     // Off macOS this is a `()`-returning stub, which clippy flags as a unit
@@ -2118,9 +2233,14 @@ fn main() -> wry::Result<()> {
     // the delegate alive for as long as the chrome WebView is used.
     #[cfg_attr(not(target_os = "macos"), allow(clippy::let_unit_value))]
     let _chrome_ui_delegate = browser_engine_wry::install_js_dialog_delegate(&chrome);
-    chrome.set_bounds(chrome_bounds(&window))?;
+    set_bounds_and_repaint(&chrome, chrome_bounds(&window))?;
 
     let mut modifiers = ModifiersState::empty();
+    // Windows-only (see the `CursorMoved` handler below): tracks whether the
+    // pointer is currently over the sidebar, to proactively move Win32/
+    // WebView2 focus onto the chrome view the moment the cursor enters it.
+    #[cfg(target_os = "windows")]
+    let mut cursor_over_sidebar = false;
     let mut palette_open = false;
     // Set only while base-ui's deferred "new tab" address-bar prompt is
     // showing (see NewTabPromptOpened/Closed below): no tab exists for it
@@ -2163,6 +2283,7 @@ fn main() -> wry::Result<()> {
                 sidebar_visible,
                 mcp_enabled,
                 &mcp_http_state,
+                &content_wake_proxy,
             ),
             Event::MainEventsCleared => {
                 let mut state_changed = false;
@@ -2250,6 +2371,7 @@ fn main() -> wry::Result<()> {
                                     &mut last_active,
                                     previous,
                                     id,
+                                    &content_wake_proxy,
                                 );
                                 state_changed = true;
                             }
@@ -2268,6 +2390,7 @@ fn main() -> wry::Result<()> {
                                 url.as_deref().unwrap_or(NEW_TAB_URL),
                                 sidebar_visible,
                                 settings.search_engine,
+                                &content_wake_proxy,
                             )
                             .is_ok()
                             {
@@ -2300,6 +2423,7 @@ fn main() -> wry::Result<()> {
                                     id,
                                     sidebar_visible,
                                     settings.search_engine,
+                                    &content_wake_proxy,
                                 );
                                 if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
@@ -2345,6 +2469,7 @@ fn main() -> wry::Result<()> {
                                     id,
                                     sidebar_visible,
                                     settings.search_engine,
+                                    &content_wake_proxy,
                                 );
                                 if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
@@ -2742,7 +2867,8 @@ fn main() -> wry::Result<()> {
                         // ContentEvent with the correct tab id inside create_content_view's
                         // IPC handler. Chrome itself never sends these commands.
                         ChromeCommand::FaviconChanged { .. }
-                        | ChromeCommand::MediaPlaybackChanged { .. } => {}
+                        | ChromeCommand::MediaPlaybackChanged { .. }
+                        | ChromeCommand::ContentTitleChanged { .. } => {}
                         ChromeCommand::OpenDevtools => {
                             if let Some(view) = tabs.current_id().and_then(|id| views.get(&id)) {
                                 view.open_devtools();
@@ -2827,6 +2953,42 @@ fn main() -> wry::Result<()> {
                                 palette_open,
                                 tabs.current_id(),
                             );
+                }
+                // Windows-only: WebView2 hosts the chrome (sidebar) and each
+                // content tab as separate child HWNDs. When Win32 keyboard
+                // focus is on a content view's HWND (the common case: the
+                // user was just reading/scrolling the page), a click that
+                // lands on the sidebar is observed to only transfer Win32
+                // focus onto the chrome HWND, without also reaching the
+                // page's own click handler — so the first click on a tab in
+                // the list, or on any other sidebar control, appears to do
+                // nothing, and only a second click (now that focus is
+                // already on chrome) actually registers. This doesn't
+                // reproduce on macOS (WKWebView instances share the window's
+                // first-responder chain differently) so it's gated here.
+                //
+                // Moving chrome's focus proactively the moment the cursor
+                // enters the sidebar — before the click's mouse-down even
+                // happens — means the focus transfer is already done by the
+                // time the user clicks, so that click reaches the page
+                // normally instead of being spent on focus.
+                #[cfg(target_os = "windows")]
+                WindowEvent::CursorMoved { position, .. } => {
+                    let logical = position.to_logical::<f64>(window.scale_factor());
+                    let sidebar_width = if sidebar_visible {
+                        SIDEBAR_WIDTH.min(logical_window_size(&window).width)
+                    } else {
+                        0.0
+                    };
+                    // Once the palette covers the full window, chrome already
+                    // has the only content there is to click, so there's
+                    // nothing to pre-empt.
+                    let over_sidebar =
+                        !palette_open && sidebar_width > 0.0 && logical.x < sidebar_width;
+                    if over_sidebar && !cursor_over_sidebar {
+                        let _ = chrome.focus();
+                    }
+                    cursor_over_sidebar = over_sidebar;
                 }
                 WindowEvent::ModifiersChanged(state) => modifiers = state,
                 WindowEvent::KeyboardInput { event, .. }
@@ -2967,6 +3129,7 @@ fn main() -> wry::Result<()> {
                                     id,
                                     sidebar_visible,
                                     settings.search_engine,
+                                    &content_wake_proxy,
                                 );
                                 if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
@@ -3063,6 +3226,7 @@ fn main() -> wry::Result<()> {
                             &mut last_active,
                             Some(current),
                             tab_ids[next_index],
+                            &content_wake_proxy,
                         );
                         send_state(
                             &chrome,
