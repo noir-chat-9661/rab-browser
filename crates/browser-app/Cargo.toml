@@ -20,3 +20,8 @@ block2 = "0.6"
 muda = "0.19.3"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["block2", "NSEvent"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Pinned to the same version wry 0.56.1 already pulls in (see Cargo.lock),
+# so the HWND type returned by WebViewExtWindows::hwnd() matches exactly.
+windows = { version = "0.61", default-features = false, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
