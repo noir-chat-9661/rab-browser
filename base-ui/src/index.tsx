@@ -659,6 +659,22 @@ function App() {
         }
       }
 
+      // Ctrl+Tab/Ctrl+Shift+Tab is the cross-platform browser convention for
+      // cycling tabs (unlike most shortcuts here, it's always Ctrl, even on
+      // macOS — hasPrimaryModifier would map it to Cmd+Tab, which is the OS
+      // app switcher and isn't ours to intercept).
+      if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === "Tab") {
+        event.preventDefault();
+        const tabs = state.tabs;
+        if (tabs.length > 1) {
+          const currentIndex = tabs.findIndex((tab) => tab.id === state.currentTabId);
+          const delta = event.shiftKey ? -1 : 1;
+          const nextIndex = (currentIndex + delta + tabs.length) % tabs.length;
+          send({ type: "select_tab", id: tabs[nextIndex].id });
+        }
+        return;
+      }
+
       if (
         !hasPrimaryModifier(event) ||
         event.altKey ||

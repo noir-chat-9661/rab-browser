@@ -60,6 +60,21 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
       postMessage({ type: "open_devtools" });
       return;
     }
+
+    // Windows/Linux back/forward is Alt+Left/Right, not Ctrl+Left/Right —
+    // hasPrimaryModifier binds Ctrl on these platforms, which browsers (and
+    // native text fields) already use for word-by-word cursor movement.
+    // Binding it to page navigation as well broke that and surprised users
+    // expecting the OS-standard Alt+Arrow shortcut instead.
+    if (!isMac && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+      if (key === "arrowleft" || key === "arrowright") {
+        event.preventDefault();
+        event.stopPropagation();
+        postMessage({ type: key === "arrowleft" ? "go_back" : "go_forward" });
+        return;
+      }
+    }
+
     if (!hasPrimaryModifier(event)) return;
 
     const primaryOnly =
@@ -73,8 +88,11 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
     }
     else if (primaryOnly && key === "s") type = "toggle_sidebar";
     else if (primaryOnly && key === "w") type = "close_current_tab";
-    else if (primaryOnly && (key === "[" || key === "arrowleft")) type = "go_back";
-    else if (primaryOnly && (key === "]" || key === "arrowright")) type = "go_forward";
+    // Cmd+[/] and Cmd+Arrow are the macOS convention; Windows/Linux use
+    // Alt+Arrow instead (handled above, before hasPrimaryModifier's Ctrl
+    // check), so these stay Mac-only.
+    else if (isMac && primaryOnly && (key === "[" || key === "arrowleft")) type = "go_back";
+    else if (isMac && primaryOnly && (key === "]" || key === "arrowright")) type = "go_forward";
     else if (
       event.altKey &&
       !hasSecondaryPrimaryModifier(event) &&
