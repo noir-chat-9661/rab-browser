@@ -25,7 +25,7 @@ use browser_core::{
 };
 use browser_engine_wry::WryEngine;
 use browser_mcp_server::{DispatchError, McpHttpHandle, McpRequest, RequestDispatcher, TabInfo};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 #[cfg(target_os = "macos")]
 use objc2::{rc::Retained, runtime::AnyObject};
@@ -619,6 +619,74 @@ fn install_app_menu(
         }
     }));
     menu.init_for_nsapp();
+    menu
+}
+
+#[cfg(target_os = "windows")]
+fn install_app_menu_windows(
+    commands_tx: Sender<String>,
+    event_loop_proxy: EventLoopProxy<McpRequest>,
+    hwnd: isize,
+) -> Menu {
+    let quit = PredefinedMenuItem::quit(None);
+    let file_menu =
+        Submenu::with_items("File", true, &[&quit]).expect("failed to build the File menu");
+
+    let undo = PredefinedMenuItem::undo(None);
+    let redo = PredefinedMenuItem::redo(None);
+    let edit_separator = PredefinedMenuItem::separator();
+    let cut = PredefinedMenuItem::cut(None);
+    let copy = PredefinedMenuItem::copy(None);
+    let paste = PredefinedMenuItem::paste(None);
+    let select_all = PredefinedMenuItem::select_all(None);
+    let edit_menu = Submenu::with_items(
+        "Edit",
+        true,
+        &[
+            &undo,
+            &redo,
+            &edit_separator,
+            &cut,
+            &copy,
+            &paste,
+            &select_all,
+        ],
+    )
+    .expect("failed to build the Edit menu");
+
+    let mcp_help = MenuItem::with_id("rab-browser.mcp-help", "MCPの使い方", true, None);
+    let settings = MenuItem::with_id("rab-browser.settings", "設定", true, None);
+    let help_menu = Submenu::with_items("Help", true, &[&mcp_help, &settings])
+        .expect("failed to build the Help menu");
+    let menu = Menu::with_items(&[&file_menu, &edit_menu, &help_menu])
+        .expect("failed to build the menu bar");
+
+    let mcp_help_id = mcp_help.id().clone();
+    let settings_id = settings.id().clone();
+    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+        let command = if event.id == mcp_help_id {
+            Some(r#"{"type":"open_mcp_help"}"#)
+        } else if event.id == settings_id {
+            Some(r#"{"type":"open_settings"}"#)
+        } else {
+            None
+        };
+        if let Some(command) = command
+            && commands_tx.send(command.to_owned()).is_ok()
+        {
+            let _ = event_loop_proxy.send_event(McpRequest::Wake);
+        }
+    }));
+
+    // Keep the native menu bar attached to this window for the event loop's lifetime.
+    // SAFETY: `hwnd` is the live HWND of the tao window that owns this event
+    // loop, obtained from WindowExtWindows::hwnd() immediately before this
+    // call; the window outlives `menu` (both are kept alive for the whole
+    // event loop via `_keep_app_menu_alive`).
+    unsafe {
+        menu.init_for_hwnd(hwnd)
+            .expect("failed to attach the Windows menu bar");
+    }
     menu
 }
 
@@ -1943,6 +2011,16 @@ fn main() -> wry::Result<()> {
     let (commands_tx, commands_rx) = mpsc::channel::<String>();
     #[cfg(target_os = "macos")]
     let app_menu = install_app_menu(commands_tx.clone(), event_loop.create_proxy());
+    #[cfg(target_os = "windows")]
+    let app_menu = {
+        use tao::platform::windows::WindowExtWindows;
+
+        install_app_menu_windows(
+            commands_tx.clone(),
+            event_loop.create_proxy(),
+            window.hwnd(),
+        )
+    };
     #[cfg(target_os = "macos")]
     let close_tab_shortcut_monitor =
         install_close_tab_shortcut_monitor(commands_tx.clone(), event_loop.create_proxy())
@@ -2003,7 +2081,7 @@ fn main() -> wry::Result<()> {
         // Keep the monitor token with the event loop so its registration has the
         // same explicit lifetime as the AppKit application.
         let _keep_close_tab_shortcut_monitor_alive = &close_tab_shortcut_monitor;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         let _keep_app_menu_alive = &app_menu;
 
         *control_flow = ControlFlow::Wait;
