@@ -317,6 +317,10 @@ impl WryEngine {
         let webview = builder.build_as_child(window)?;
         #[cfg(target_os = "macos")]
         let container = attach_to_offset_container(window, &webview, bounds);
+        // Off macOS this is the `()`-returning stub above, which clippy flags
+        // as a unit let-binding; the binding still has to exist because the
+        // macOS build stores a real delegate handle in `_ui_delegate`.
+        #[cfg_attr(not(target_os = "macos"), allow(clippy::let_unit_value))]
         let ui_delegate = install_js_dialog_delegate(&webview);
         let engine = Self {
             webview,
