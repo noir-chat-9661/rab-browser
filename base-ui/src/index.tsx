@@ -666,8 +666,8 @@ function App() {
       if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === "Tab") {
         event.preventDefault();
         const tabs = state.tabs;
-        if (tabs.length > 1) {
-          const currentIndex = tabs.findIndex((tab) => tab.id === state.currentTabId);
+        const currentIndex = tabs.findIndex((tab) => tab.id === state.currentTabId);
+        if (tabs.length > 1 && currentIndex !== -1) {
           const delta = event.shiftKey ? -1 : 1;
           const nextIndex = (currentIndex + delta + tabs.length) % tabs.length;
           send({ type: "select_tab", id: tabs[nextIndex].id });

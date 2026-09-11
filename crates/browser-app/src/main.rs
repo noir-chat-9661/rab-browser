@@ -2805,8 +2805,17 @@ fn main() -> wry::Result<()> {
                                 let _ = view.reload();
                             }
                         }
+                        // Cmd+[ / Cmd+Arrow on macOS, matching the injected
+                        // content script's KEYBOARD_SHORTCUT_SCRIPT. Ctrl+Arrow
+                        // is excluded on other platforms — see the dedicated
+                        // Alt+Arrow arm below, which is what Windows/Linux use
+                        // for back/forward (Ctrl+Arrow there means
+                        // word-by-word text-editing cursor movement instead).
                         KeyCode::BracketLeft | KeyCode::ArrowLeft
-                            if !modifiers.alt_key() && !modifiers.shift_key() =>
+                            if !modifiers.alt_key()
+                                && !modifiers.shift_key()
+                                && (event.physical_key == KeyCode::BracketLeft
+                                    || cfg!(target_os = "macos")) =>
                         {
                             if let Some(id) = tabs.current_id()
                                 && let Some(history) = histories.get_mut(&id)
@@ -2819,7 +2828,10 @@ fn main() -> wry::Result<()> {
                             }
                         }
                         KeyCode::BracketRight | KeyCode::ArrowRight
-                            if !modifiers.alt_key() && !modifiers.shift_key() =>
+                            if !modifiers.alt_key()
+                                && !modifiers.shift_key()
+                                && (event.physical_key == KeyCode::BracketRight
+                                    || cfg!(target_os = "macos")) =>
                         {
                             if let Some(id) = tabs.current_id()
                                 && let Some(history) = histories.get_mut(&id)
@@ -2907,6 +2919,91 @@ fn main() -> wry::Result<()> {
                             }
                         }
                         _ => {}
+                    }
+                }
+                // Windows/Linux back/forward: Alt+Arrow, the OS convention —
+                // separate from the primary_modifier_pressed (Ctrl) block
+                // above because Ctrl+Arrow means word-by-word text-editing
+                // cursor movement on these platforms, not page navigation.
+                WindowEvent::KeyboardInput { event, .. }
+                    if event.state == ElementState::Pressed
+                        && !cfg!(target_os = "macos")
+                        && modifiers.alt_key()
+                        && !modifiers.control_key()
+                        && !modifiers.shift_key()
+                        && !modifiers.super_key() =>
+                {
+                    match event.physical_key {
+                        KeyCode::ArrowLeft => {
+                            if let Some(id) = tabs.current_id()
+                                && let Some(history) = histories.get_mut(&id)
+                                && history.go_back()
+                            {
+                                if let Some(view) = views.get_mut(&id) {
+                                    let _ = view.go_back();
+                                }
+                                update_history_flags(&mut tabs, &histories, id);
+                            }
+                        }
+                        KeyCode::ArrowRight => {
+                            if let Some(id) = tabs.current_id()
+                                && let Some(history) = histories.get_mut(&id)
+                                && history.go_forward()
+                            {
+                                if let Some(view) = views.get_mut(&id) {
+                                    let _ = view.go_forward();
+                                }
+                                update_history_flags(&mut tabs, &histories, id);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                // Ctrl+Tab/Ctrl+Shift+Tab cycles tabs, the cross-platform
+                // browser convention — always Ctrl, even on macOS, unlike
+                // primary_modifier_pressed's Cmd (Cmd+Tab is the OS app
+                // switcher and isn't ours to intercept). Mirrors base-ui's
+                // own Ctrl+Tab handler, needed here too since this native
+                // path is what actually receives the keydown when a content
+                // tab (not the chrome overlay) has focus.
+                WindowEvent::KeyboardInput { event, .. }
+                    if event.state == ElementState::Pressed
+                        && event.physical_key == KeyCode::Tab
+                        && modifiers.control_key()
+                        && !modifiers.alt_key()
+                        && !modifiers.super_key() =>
+                {
+                    let tab_ids: Vec<TabId> = tabs.tabs().map(|tab| tab.id).collect();
+                    if tab_ids.len() > 1
+                        && let Some(current) = tabs.current_id()
+                        && let Some(current_index) =
+                            tab_ids.iter().position(|&id| id == current)
+                    {
+                        let delta: isize = if modifiers.shift_key() { -1 } else { 1 };
+                        let next_index = (current_index as isize + delta)
+                            .rem_euclid(tab_ids.len() as isize) as usize;
+                        select_content_view(
+                            &window,
+                            &mut tabs,
+                            &mut views,
+                            &content_events_tx,
+                            &commands_tx,
+                            &current_theme,
+                            sidebar_visible,
+                            &mut last_active,
+                            Some(current),
+                            tab_ids[next_index],
+                        );
+                        send_state(
+                            &chrome,
+                            &tabs,
+                            &views,
+                            &bookmarks,
+                            &history,
+                            &settings,
+                            mcp_enabled,
+                            &mcp_http_state,
+                        );
                     }
                 }
                 WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
