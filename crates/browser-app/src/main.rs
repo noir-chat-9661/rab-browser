@@ -714,6 +714,9 @@ fn bring_chrome_to_front(chrome: &WebView) {
     // pure z-order change; SWP_NOACTIVATE keeps focus wherever the caller
     // already put it (chrome.focus() runs right after this).
     let hwnd = chrome.hwnd();
+    // SAFETY: `hwnd` is the live child HWND WebViewExtWindows::hwnd() just
+    // returned for `chrome`, which outlives this call; SetWindowPos doesn't
+    // retain the handle past the call, so no dangling/aliasing risk.
     unsafe {
         let _ = SetWindowPos(
             hwnd,
