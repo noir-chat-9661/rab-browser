@@ -700,7 +700,34 @@ fn bring_chrome_to_front(chrome: &WebView) {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn bring_chrome_to_front(chrome: &WebView) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
+    };
+    use wry::WebViewExtWindows;
+
+    // WebView2 hosts each WebView in its own child HWND, added to the
+    // window's HWND tree in creation order — so a content tab created after
+    // the chrome overlay otherwise sits above it in z-order, same root
+    // cause as the WKWebView case above. SWP_NOMOVE/SWP_NOSIZE keep this a
+    // pure z-order change; SWP_NOACTIVATE keeps focus wherever the caller
+    // already put it (chrome.focus() runs right after this).
+    let hwnd = chrome.hwnd();
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOP),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn bring_chrome_to_front(_chrome: &WebView) {}
 
 /// Recreates a suspended tab's WKWebView on demand (navigated back to its
