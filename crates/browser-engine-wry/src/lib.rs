@@ -160,7 +160,7 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
     const title = document.title;
     if (title === lastTitle) return;
     lastTitle = title;
-    postMessage({ type: "content_title_changed", title });
+    postMessage({ type: "content_title_changed", title, url: location.href });
   };
 
   document.addEventListener("DOMContentLoaded", () => {
