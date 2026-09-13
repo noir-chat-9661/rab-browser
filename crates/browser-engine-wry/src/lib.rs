@@ -148,8 +148,29 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
     postMessage({ type: "favicon_changed", url });
   };
 
-  document.addEventListener("DOMContentLoaded", notifyFaviconChanged);
-  window.addEventListener("load", notifyFaviconChanged);
+  // Counterpart to WebView2's native DocumentTitleChanged event (consumed
+  // directly on the Rust side): that one is observed on Windows to
+  // sometimes not fire for an in-tab navigation, or to fire before the new
+  // page's <title> has actually been parsed yet (reporting the previous
+  // page's title). Reading `document.title` here, from inside the
+  // MutationObserver callback below that only runs once <head> has really
+  // changed, can't have that race.
+  let lastTitle;
+  const notifyTitleChanged = () => {
+    const title = document.title;
+    if (title === lastTitle) return;
+    lastTitle = title;
+    postMessage({ type: "content_title_changed", title, url: location.href });
+  };
+
+  document.addEventListener("DOMContentLoaded", () => {
+    notifyFaviconChanged();
+    notifyTitleChanged();
+  });
+  window.addEventListener("load", () => {
+    notifyFaviconChanged();
+    notifyTitleChanged();
+  });
   // This script runs at document-start, before <head> (or even <html>)
   // necessarily exists, so the observer can't just be attached once here
   // (document.head, and even document.documentElement, may still be null).
@@ -157,21 +178,25 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
   // there, otherwise via a one-shot observer on the always-present
   // `document` that watches for <head> to be inserted and then re-targets
   // itself to just <head>.
-  const observeHeadFavicon = (head) => {
-    new MutationObserver(notifyFaviconChanged).observe(head, {
+  const observeHeadChanges = (head) => {
+    new MutationObserver(() => {
+      notifyFaviconChanged();
+      notifyTitleChanged();
+    }).observe(head, {
       childList: true,
       subtree: true,
+      characterData: true,
       attributes: true,
       attributeFilter: ["href", "rel"],
     });
   };
   if (document.head) {
-    observeHeadFavicon(document.head);
+    observeHeadChanges(document.head);
   } else {
     const rootObserver = new MutationObserver(() => {
       if (!document.head) return;
       rootObserver.disconnect();
-      observeHeadFavicon(document.head);
+      observeHeadChanges(document.head);
     });
     rootObserver.observe(document, { childList: true, subtree: true });
   }
