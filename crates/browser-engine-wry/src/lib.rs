@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use browser_core::{BrowserEngine, BrowserError, Theme};
 use tao::window::Window;
 use wry::{
-    PageLoadEvent, Rect, WebView, WebViewBuilder,
+    PageLoadEvent, Rect, WebContext, WebView, WebViewBuilder,
     http::{Request, Response},
 };
 
@@ -275,6 +275,11 @@ impl WryEngine {
         on_page_load: impl Fn(PageLoadEvent, String) + 'static,
         on_ipc: impl Fn(Request<String>) + 'static,
     ) -> Result<Self, wry::Error> {
+        // No caller-shared `WebContext` here (this constructor has no
+        // parameter for one) — falls back to a throwaway per-webview context
+        // with no explicit data directory, same as before `build` grew a
+        // `WebContext` parameter.
+        let mut web_context = WebContext::new(None);
         Self::build(
             window,
             url,
@@ -284,6 +289,7 @@ impl WryEngine {
             on_page_load,
             on_ipc,
             None,
+            &mut web_context,
         )
     }
 
@@ -298,6 +304,7 @@ impl WryEngine {
         on_ipc: impl Fn(Request<String>) + 'static,
         protocol_name: &str,
         protocol_handler: impl Fn(Request<Vec<u8>>) -> Response<Vec<u8>> + Send + Sync + 'static,
+        web_context: &mut WebContext,
     ) -> Result<Self, wry::Error> {
         Self::build(
             window,
@@ -308,6 +315,7 @@ impl WryEngine {
             on_page_load,
             on_ipc,
             Some((protocol_name.to_owned(), Box::new(protocol_handler))),
+            web_context,
         )
     }
 
@@ -321,8 +329,9 @@ impl WryEngine {
         on_page_load: impl Fn(PageLoadEvent, String) + 'static,
         on_ipc: impl Fn(Request<String>) + 'static,
         custom_protocol: Option<(String, CustomProtocolHandler)>,
+        web_context: &mut WebContext,
     ) -> Result<Self, wry::Error> {
-        let mut builder = WebViewBuilder::new()
+        let mut builder = WebViewBuilder::new_with_web_context(web_context)
             .with_initialization_script(KEYBOARD_SHORTCUT_SCRIPT)
             .with_url(url)
             .with_user_agent(MODERN_USER_AGENT)
