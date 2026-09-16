@@ -1,7 +1,7 @@
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::router::tool::ToolRouter,
-    model::{ServerCapabilities, ServerInfo},
+    model::{ServerCapabilities, ServerConfig},
     tool, tool_handler, tool_router,
 };
 
@@ -27,8 +27,8 @@ impl PingServer {
 
 #[tool_handler]
 impl ServerHandler for PingServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions("Phase 0 rmcp stdio smoke-test server")
     }
 }
