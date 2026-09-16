@@ -50,6 +50,18 @@ const SIDEBAR_WIDTH: f64 = 264.0;
 const INTERNAL_PROTOCOL: &str = "rab";
 const NEW_TAB_URL: &str = "rab://newtab/";
 
+/// Reads an environment variable as an absolute path, treating unset *or*
+/// empty/relative values as absent. `env::var_os` returns `Some("")` for a
+/// variable that's set-but-empty, which would otherwise resolve to a
+/// current-directory-relative path — silently recreating the exact
+/// exe-adjacent-data problem `webview_data_directory` below exists to avoid.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn absolute_path_env(key: &str) -> Option<PathBuf> {
+    env::var_os(key)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+}
+
 /// Where WebView2 (Windows) / webkit2gtk (Linux) should keep their shared
 /// browsing profile (cookies, cache, local storage, ...). Without this,
 /// they default to a folder next to the executable — fine for an installed
@@ -60,21 +72,17 @@ const NEW_TAB_URL: &str = "rab://newtab/";
 /// so `None` there is a no-op, not a workaround.
 #[cfg(target_os = "windows")]
 fn webview_data_directory() -> Option<PathBuf> {
-    let local_app_data = env::var_os("LOCALAPPDATA")?;
-    Some(
-        PathBuf::from(local_app_data)
-            .join("rab-browser")
-            .join("WebView2"),
-    )
+    let local_app_data = absolute_path_env("LOCALAPPDATA")?;
+    Some(local_app_data.join("rab-browser").join("WebView2"))
 }
 
 #[cfg(target_os = "linux")]
 fn webview_data_directory() -> Option<PathBuf> {
-    if let Some(xdg_data_home) = env::var_os("XDG_DATA_HOME") {
-        return Some(PathBuf::from(xdg_data_home).join("rab-browser"));
+    if let Some(xdg_data_home) = absolute_path_env("XDG_DATA_HOME") {
+        return Some(xdg_data_home.join("rab-browser"));
     }
-    let home = env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".local/share/rab-browser"))
+    let home = absolute_path_env("HOME")?;
+    Some(home.join(".local/share/rab-browser"))
 }
 
 #[cfg(target_os = "macos")]
