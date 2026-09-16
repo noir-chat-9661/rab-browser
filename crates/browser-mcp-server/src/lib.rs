@@ -5,7 +5,7 @@ use std::{fmt, path::PathBuf, sync::Arc, thread::JoinHandle, time::Duration};
 use rmcp::{
     ErrorData, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{ServerCapabilities, ServerInfo},
+    model::{ServerCapabilities, ServerConfig},
     schemars::{self, JsonSchema},
     tool, tool_handler, tool_router,
     transport::streamable_http_server::{
@@ -356,8 +356,8 @@ fn wrapped_script(body: &str) -> String {
 
 #[tool_handler]
 impl ServerHandler for BrowserMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
             "Control the visible tabs of the running rab-browser Attached-mode process.",
         )
     }
