@@ -42,13 +42,53 @@ use tao::{
     window::{Window, WindowBuilder},
 };
 use wry::{
-    PageLoadEvent, Rect, WebView, WebViewBuilder,
+    PageLoadEvent, Rect, WebContext, WebView, WebViewBuilder,
     http::{Request, Response, header::CONTENT_TYPE},
 };
 
 const SIDEBAR_WIDTH: f64 = 264.0;
 const INTERNAL_PROTOCOL: &str = "rab";
 const NEW_TAB_URL: &str = "rab://newtab/";
+
+/// Reads an environment variable as an absolute path, treating unset *or*
+/// empty/relative values as absent. `env::var_os` returns `Some("")` for a
+/// variable that's set-but-empty, which would otherwise resolve to a
+/// current-directory-relative path — silently recreating the exact
+/// exe-adjacent-data problem `webview_data_directory` below exists to avoid.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn absolute_path_env(key: &str) -> Option<PathBuf> {
+    env::var_os(key)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+}
+
+/// Where WebView2 (Windows) / webkit2gtk (Linux) should keep their shared
+/// browsing profile (cookies, cache, local storage, ...). Without this,
+/// they default to a folder next to the executable — fine for an installed
+/// app, but rab-browser ships as a portable, unsigned single file, so that
+/// default litters wherever the user happens to keep it (e.g. `Downloads`)
+/// and leaves that data orphaned if the file is later moved or deleted.
+/// WKWebView (macOS) already keeps its data under `~/Library` on its own,
+/// so `None` there is a no-op, not a workaround.
+#[cfg(target_os = "windows")]
+fn webview_data_directory() -> Option<PathBuf> {
+    let local_app_data = absolute_path_env("LOCALAPPDATA")?;
+    Some(local_app_data.join("rab-browser").join("WebView2"))
+}
+
+#[cfg(target_os = "linux")]
+fn webview_data_directory() -> Option<PathBuf> {
+    if let Some(xdg_data_home) = absolute_path_env("XDG_DATA_HOME") {
+        return Some(xdg_data_home.join("rab-browser"));
+    }
+    let home = absolute_path_env("HOME")?;
+    Some(home.join(".local/share/rab-browser"))
+}
+
+#[cfg(target_os = "macos")]
+fn webview_data_directory() -> Option<PathBuf> {
+    None
+}
 
 struct ProxyDispatcher(EventLoopProxy<McpRequest>);
 
@@ -753,6 +793,7 @@ fn create_content_view(
     commands_tx: &Sender<String>,
     theme: &Arc<Mutex<Theme>>,
     event_loop_proxy: &EventLoopProxy<McpRequest>,
+    web_context: &mut WebContext,
 ) -> wry::Result<WryEngine> {
     let title_tx = events_tx.clone();
     let title_wake = event_loop_proxy.clone();
@@ -820,6 +861,7 @@ fn create_content_view(
             let theme = *internal_page_theme.lock().unwrap();
             internal_page_response(request, theme)
         },
+        web_context,
     )?;
     // Keep this as a post-build correction too: the window scale or size may
     // have changed while WKWebView was being initialized.
@@ -1029,6 +1071,7 @@ fn ensure_content_view(
     last_active: &mut BTreeMap<TabId, Instant>,
     id: TabId,
     event_loop_proxy: &EventLoopProxy<McpRequest>,
+    web_context: &mut WebContext,
 ) -> bool {
     if views.contains_key(&id) {
         return true;
@@ -1045,6 +1088,7 @@ fn ensure_content_view(
         commands_tx,
         theme,
         event_loop_proxy,
+        web_context,
     ) else {
         return false;
     };
@@ -1073,6 +1117,7 @@ fn select_content_view(
     previous: Option<TabId>,
     id: TabId,
     event_loop_proxy: &EventLoopProxy<McpRequest>,
+    web_context: &mut WebContext,
 ) {
     if tabs.tab(id).is_none() {
         return;
@@ -1101,6 +1146,7 @@ fn select_content_view(
         last_active,
         id,
         event_loop_proxy,
+        web_context,
     ) {
         return;
     }
@@ -1296,6 +1342,7 @@ fn add_tab(
     sidebar_visible: bool,
     search_engine: SearchEngine,
     event_loop_proxy: &EventLoopProxy<McpRequest>,
+    web_context: &mut WebContext,
 ) -> wry::Result<TabId> {
     let url = normalize_url(url, search_engine);
     let previous = tabs.current_id();
@@ -1309,6 +1356,7 @@ fn add_tab(
         commands_tx,
         theme,
         event_loop_proxy,
+        web_context,
     ) {
         Ok(view) => {
             histories.insert(id, TabHistory::new(url));
@@ -1325,6 +1373,7 @@ fn add_tab(
                 previous,
                 id,
                 event_loop_proxy,
+                web_context,
             );
             Ok(id)
         }
@@ -1350,6 +1399,7 @@ fn close_tab(
     sidebar_visible: bool,
     search_engine: SearchEngine,
     event_loop_proxy: &EventLoopProxy<McpRequest>,
+    web_context: &mut WebContext,
 ) -> CloseTabResult {
     if is_only_new_tab(tabs, id) {
         return CloseTabResult::Ignored;
@@ -1380,6 +1430,7 @@ fn close_tab(
             sidebar_visible,
             search_engine,
             event_loop_proxy,
+            web_context,
         )
         .is_ok()
         {
@@ -1400,6 +1451,7 @@ fn close_tab(
             previous,
             current,
             event_loop_proxy,
+            web_context,
         );
     }
     CloseTabResult::Closed
@@ -1828,6 +1880,7 @@ fn handle_mcp_request(
     mcp_enabled: bool,
     mcp_http_state: &McpHttpState,
     event_loop_proxy: &EventLoopProxy<McpRequest>,
+    web_context: &mut WebContext,
 ) {
     match request {
         McpRequest::Wake => {}
@@ -1858,6 +1911,7 @@ fn handle_mcp_request(
                 sidebar_visible,
                 settings.search_engine,
                 event_loop_proxy,
+                web_context,
             ) {
                 Ok(id) => {
                     bring_chrome_to_front(chrome);
@@ -1898,6 +1952,7 @@ fn handle_mcp_request(
                 sidebar_visible,
                 settings.search_engine,
                 event_loop_proxy,
+                web_context,
             );
             if result == CloseTabResult::CreatedReplacement {
                 bring_chrome_to_front(chrome);
@@ -1929,6 +1984,7 @@ fn handle_mcp_request(
                     previous,
                     id,
                     event_loop_proxy,
+                    web_context,
                 );
                 true
             });
@@ -2072,6 +2128,7 @@ fn handle_mcp_request(
                 last_active,
                 id,
                 event_loop_proxy,
+                web_context,
             ) {
                 let _ = reply.send(Err("target tab has no content view".to_owned()));
                 return;
@@ -2307,6 +2364,10 @@ fn main() -> wry::Result<()> {
     let mut last_active = BTreeMap::new();
     let mut playing_media = BTreeMap::new();
     let mut sidebar_visible = true;
+    // Shared across chrome and every content tab (see `webview_data_directory`)
+    // so WebView2/webkit2gtk keep one profile in a real app-data location
+    // instead of each defaulting to a folder next to this portable binary.
+    let mut web_context = WebContext::new(webview_data_directory());
     add_tab(
         &window,
         &mut tabs,
@@ -2320,6 +2381,7 @@ fn main() -> wry::Result<()> {
         sidebar_visible,
         settings.search_engine,
         &content_wake_proxy,
+        &mut web_context,
     )?;
 
     let chrome_commands_tx = commands_tx.clone();
@@ -2335,7 +2397,7 @@ fn main() -> wry::Result<()> {
     // `send_event(McpRequest::Wake)` is a plain no-op event (see its match
     // arm below); its only job is to wake `ControlFlow::Wait` immediately.
     let chrome_wake_proxy = event_loop.create_proxy();
-    let chrome = WebViewBuilder::new()
+    let chrome = WebViewBuilder::new_with_web_context(&mut web_context)
         .with_html(CHROME_HTML)
         .with_transparent(true)
         .with_devtools(true)
@@ -2401,6 +2463,7 @@ fn main() -> wry::Result<()> {
                 mcp_enabled,
                 &mcp_http_state,
                 &content_wake_proxy,
+                &mut web_context,
             ),
             Event::MainEventsCleared => {
                 let mut state_changed = false;
@@ -2503,6 +2566,7 @@ fn main() -> wry::Result<()> {
                                     previous,
                                     id,
                                     &content_wake_proxy,
+                                    &mut web_context,
                                 );
                                 state_changed = true;
                             }
@@ -2522,6 +2586,7 @@ fn main() -> wry::Result<()> {
                                 sidebar_visible,
                                 settings.search_engine,
                                 &content_wake_proxy,
+                                &mut web_context,
                             )
                             .is_ok()
                             {
@@ -2555,6 +2620,7 @@ fn main() -> wry::Result<()> {
                                     sidebar_visible,
                                     settings.search_engine,
                                     &content_wake_proxy,
+                                    &mut web_context,
                                 );
                                 if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
@@ -2601,6 +2667,7 @@ fn main() -> wry::Result<()> {
                                     sidebar_visible,
                                     settings.search_engine,
                                     &content_wake_proxy,
+                                    &mut web_context,
                                 );
                                 if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
@@ -3261,6 +3328,7 @@ fn main() -> wry::Result<()> {
                                     sidebar_visible,
                                     settings.search_engine,
                                     &content_wake_proxy,
+                                    &mut web_context,
                                 );
                                 if result == CloseTabResult::CreatedReplacement {
                                     bring_chrome_to_front(&chrome);
@@ -3358,6 +3426,7 @@ fn main() -> wry::Result<()> {
                             Some(current),
                             tab_ids[next_index],
                             &content_wake_proxy,
+                            &mut web_context,
                         );
                         send_state(
                             &chrome,
