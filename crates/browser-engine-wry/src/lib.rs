@@ -331,6 +331,18 @@ impl WryEngine {
         custom_protocol: Option<(String, CustomProtocolHandler)>,
         web_context: &mut WebContext,
     ) -> Result<Self, wry::Error> {
+        // On Linux (webkit2gtk), a custom protocol is registered on the
+        // shared `WebContext` itself rather than per-webview, so once one
+        // webview here has registered it, every other webview sharing that
+        // context already has it — registering again errors out as a
+        // duplicate. macOS/Windows register per-webview instead and never
+        // populate this set, so this check is a permanent no-op there and
+        // every webview still registers as before. Checked before building
+        // `WebViewBuilder` since that call mutably borrows `web_context` for
+        // the rest of this function.
+        let already_registered = custom_protocol
+            .as_ref()
+            .is_some_and(|(name, _)| web_context.is_custom_protocol_registered(name));
         let mut builder = WebViewBuilder::new_with_web_context(web_context)
             .with_initialization_script(KEYBOARD_SHORTCUT_SCRIPT)
             .with_url(url)
@@ -340,7 +352,9 @@ impl WryEngine {
             .with_document_title_changed_handler(on_title_changed)
             .with_on_page_load_handler(on_page_load)
             .with_ipc_handler(on_ipc);
-        if let Some((name, handler)) = custom_protocol {
+        if let Some((name, handler)) = custom_protocol
+            && !already_registered
+        {
             builder = builder.with_custom_protocol(name, move |_webview_id, request| {
                 handler(request).map(Cow::Owned)
             });
