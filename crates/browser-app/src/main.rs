@@ -2427,7 +2427,7 @@ fn main() -> wry::Result<()> {
     let mut new_tab_prompt_open = false;
     let mut mcp_http: Option<McpHttpHandle> = None;
     let mut mcp_http_state = McpHttpState::default();
-    // Identifies the tab/request a pending window.find() callback belongs to,
+    // Identifies the tab/request a pending __rabFind() callback belongs to,
     // so a result that lands after the user switched tabs, closed the find
     // bar, or issued a newer search is dropped instead of shown for the
     // wrong page.
@@ -2764,7 +2764,7 @@ fn main() -> wry::Result<()> {
                             };
                             find_target_tab = Some(id);
                             let script =
-                                format!("window.find({query_json}, false, {backwards})");
+                                format!("window.__rabFind({query_json}, {backwards})");
                             let result_tx = commands_tx.clone();
                             let result_proxy = find_event_loop_proxy.clone();
                             let result_query = query.clone();
@@ -2805,9 +2805,7 @@ fn main() -> wry::Result<()> {
                             let target = find_target_tab.or_else(|| tabs.current_id());
                             find_target_tab = None;
                             if let Some(view) = target.and_then(|id| views.get(&id)) {
-                                let _ = view.evaluate_script(
-                                    "window.getSelection()?.removeAllRanges();",
-                                );
+                                let _ = view.evaluate_script("window.__rabFindClear?.();");
                             }
                         }
                         ChromeCommand::GoBack => {

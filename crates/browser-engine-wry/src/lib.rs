@@ -215,6 +215,129 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
   document.addEventListener("pause", notifyMediaPlaybackChanged, true);
   document.addEventListener("ended", notifyMediaPlaybackChanged, true);
   document.addEventListener("DOMContentLoaded", notifyMediaPlaybackChanged);
+
+  // Find-in-page, implemented as a plain DOM text scan instead of the
+  // native `window.find()`/Selection API: both WKWebView and WebView2 are
+  // observed to skip `user-select: none` text when finding via Selection,
+  // which silently breaks search on pages that use it for UI chrome (menus,
+  // buttons, ...) around real content (see rab-browser#128).
+  const FIND_MARK_CLASS = "__rab-find-mark";
+  const FIND_CURRENT_CLASS = "__rab-find-current";
+  let findMarks = [];
+  let findCurrentIndex = -1;
+  let findLastQuery = null;
+
+  const ensureFindStyle = () => {
+    if (document.getElementById("__rab-find-style")) return;
+    const style = document.createElement("style");
+    style.id = "__rab-find-style";
+    style.textContent = `
+      mark.${FIND_MARK_CLASS} { background: #ffe066; color: #1a1a1a; }
+      mark.${FIND_CURRENT_CLASS} { background: #ff9632; }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  };
+
+  const clearFindHighlights = () => {
+    for (const mark of findMarks) {
+      const parent = mark.parentNode;
+      if (!parent) continue;
+      parent.replaceChild(document.createTextNode(mark.textContent), mark);
+      parent.normalize();
+    }
+    findMarks = [];
+    findCurrentIndex = -1;
+    findLastQuery = null;
+  };
+
+  const collectFindableTextNodes = () => {
+    const root = document.body || document.documentElement;
+    if (!root) return [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA"].includes(parent.tagName)) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        if (!node.nodeValue || !node.nodeValue.trim()) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        const style = window.getComputedStyle(parent);
+        if (style.display === "none" || style.visibility === "hidden") {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    const nodes = [];
+    let node;
+    while ((node = walker.nextNode())) nodes.push(node);
+    return nodes;
+  };
+
+  const highlightFindMatches = (query) => {
+    clearFindHighlights();
+    if (!query) return;
+    ensureFindStyle();
+    const lowerQuery = query.toLowerCase();
+    for (const textNode of collectFindableTextNodes()) {
+      const text = textNode.nodeValue;
+      const lowerText = text.toLowerCase();
+      const fragments = [];
+      let cursor = 0;
+      let matchIndex = lowerText.indexOf(lowerQuery, cursor);
+      if (matchIndex === -1) continue;
+      while (matchIndex !== -1) {
+        if (matchIndex > cursor) {
+          fragments.push(document.createTextNode(text.slice(cursor, matchIndex)));
+        }
+        const mark = document.createElement("mark");
+        mark.className = FIND_MARK_CLASS;
+        mark.textContent = text.slice(matchIndex, matchIndex + query.length);
+        fragments.push(mark);
+        findMarks.push(mark);
+        cursor = matchIndex + query.length;
+        matchIndex = lowerText.indexOf(lowerQuery, cursor);
+      }
+      if (cursor < text.length) {
+        fragments.push(document.createTextNode(text.slice(cursor)));
+      }
+      const parent = textNode.parentNode;
+      if (!parent) continue;
+      for (const fragment of fragments) parent.insertBefore(fragment, textNode);
+      parent.removeChild(textNode);
+    }
+    findLastQuery = query;
+  };
+
+  const setCurrentFindMatch = (index) => {
+    const previous = findMarks[findCurrentIndex];
+    if (previous) previous.classList.remove(FIND_CURRENT_CLASS);
+    findCurrentIndex = index;
+    const current = findMarks[findCurrentIndex];
+    if (current) {
+      current.classList.add(FIND_CURRENT_CLASS);
+      current.scrollIntoView({ block: "center", inline: "nearest" });
+    }
+  };
+
+  window.__rabFind = (query, backwards) => {
+    if (query !== findLastQuery) {
+      highlightFindMatches(query);
+      setCurrentFindMatch(findMarks.length > 0 ? 0 : -1);
+    } else if (findMarks.length > 0) {
+      let next = findCurrentIndex + (backwards ? -1 : 1);
+      if (next >= findMarks.length) next = 0;
+      if (next < 0) next = findMarks.length - 1;
+      setCurrentFindMatch(next);
+    }
+    return findMarks.length > 0;
+  };
+
+  window.__rabFindClear = () => {
+    clearFindHighlights();
+  };
 })();
 "#;
 
