@@ -9,7 +9,7 @@ browser-core = { path = "../browser-core" }
 browser-engine-wry = { path = "../browser-engine-wry" }
 browser-mcp-server = { path = "../browser-mcp-server" }
 tao = "0.37.0"
-wry = { version = "0.56.1", features = ["devtools"] }
+wry = { version = "0.57.0", features = ["devtools"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1"
@@ -22,6 +22,6 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["block2", "NSEvent"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-# Pinned to the same version wry 0.56.1 already pulls in (see Cargo.lock),
+# Pinned to the same version wry 0.57.0 already pulls in (see Cargo.lock),
 # so the HWND type returned by WebViewExtWindows::hwnd() matches exactly.
-windows = { version = "0.61", default-features = false, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_UI_Input_KeyboardAndMouse"] }
+windows = { version = "0.62", default-features = false, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_UI_Input_KeyboardAndMouse"] }
