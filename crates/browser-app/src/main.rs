@@ -2753,6 +2753,7 @@ fn main() -> wry::Result<()> {
                                 continue;
                             };
                             if query.is_empty() {
+                                let _ = view.evaluate_script("window.__rabFindClear?.();");
                                 find_target_tab = None;
                                 send_find_result(&chrome, &query, false);
                                 continue;

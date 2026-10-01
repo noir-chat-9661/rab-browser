@@ -274,9 +274,12 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
           return NodeFilter.FILTER_REJECT;
         }
         if (parent.isContentEditable) return NodeFilter.FILTER_REJECT;
-        if (!node.nodeValue || !node.nodeValue.trim()) {
-          return NodeFilter.FILTER_REJECT;
-        }
+        if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
+        // Whitespace-only nodes are kept rather than skipped: dropping them
+        // would concatenate adjacent runs with no separator at all, joining
+        // e.g. `<span>foo</span> <strong>bar</strong>` into "foobar" and
+        // making it unmatchable by "foo bar" — the actual rendered text has
+        // a space there, carried by exactly this kind of node.
         // `checkVisibility` (where available) accounts for the whole
         // ancestor chain, unlike checking this node's immediate parent's
         // own `display`/`visibility` alone.

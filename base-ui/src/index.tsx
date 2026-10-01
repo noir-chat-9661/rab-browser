@@ -472,9 +472,11 @@ function App() {
     lastCommittedFindQuery = query;
     setFindQuery(query);
     setFindFound(null);
-    if (query) {
-      send({ type: "find_in_page", query, backwards: false });
-    }
+    // Also sent for an empty query (not just a truthy one): the native side
+    // treats that as "clear", so skipping the send here would leave the
+    // previous query's highlights visible in the page after the user
+    // erases the find box without closing the bar.
+    send({ type: "find_in_page", query, backwards: false });
   };
 
   const closeFindBar = () => {
