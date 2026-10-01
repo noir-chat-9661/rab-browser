@@ -215,6 +215,201 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
   document.addEventListener("pause", notifyMediaPlaybackChanged, true);
   document.addEventListener("ended", notifyMediaPlaybackChanged, true);
   document.addEventListener("DOMContentLoaded", notifyMediaPlaybackChanged);
+
+  // Find-in-page, implemented as a plain DOM text scan instead of the
+  // native `window.find()`/Selection API: both WKWebView and WebView2 are
+  // observed to skip `user-select: none` text when finding via Selection,
+  // which silently breaks search on pages that use it for UI chrome (menus,
+  // buttons, ...) around real content (see rab-browser#128).
+  //
+  // Highlighting uses the CSS Custom Highlight API (`CSS.highlights`) rather
+  // than wrapping matches in `<mark>` elements: splicing `<mark>` into the
+  // DOM replaces the original Text nodes, which breaks any reference the
+  // page's own JS (or a framework's virtual DOM) holds to them, and can
+  // corrupt `contenteditable`/form internals. `CSS.highlights` paints over
+  // a `Range` without touching the DOM at all. Where it's unavailable (an
+  // older WebKitGTK on Linux), this falls back to reporting `found` and
+  // scrolling to the match with no visual highlight, rather than falling
+  // back to the destructive approach.
+  const FIND_HIGHLIGHT_NAME = "rab-find";
+  const FIND_CURRENT_HIGHLIGHT_NAME = "rab-find-current";
+  const supportsHighlightApi = typeof Highlight !== "undefined" && CSS.highlights;
+  let findRanges = [];
+  let findCurrentIndex = -1;
+  let findLastQuery = null;
+
+  const ensureFindStyle = () => {
+    if (!supportsHighlightApi || document.getElementById("__rab-find-style")) return;
+    const style = document.createElement("style");
+    style.id = "__rab-find-style";
+    style.textContent = `
+      ::highlight(${FIND_HIGHLIGHT_NAME}) { background: #ffe066; color: #1a1a1a; }
+      ::highlight(${FIND_CURRENT_HIGHLIGHT_NAME}) { background: #ff9632; }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  };
+
+  const clearFindHighlights = () => {
+    if (supportsHighlightApi) {
+      CSS.highlights.delete(FIND_HIGHLIGHT_NAME);
+      CSS.highlights.delete(FIND_CURRENT_HIGHLIGHT_NAME);
+    }
+    findRanges = [];
+    findCurrentIndex = -1;
+    findLastQuery = null;
+  };
+
+  // Collects text nodes in document order along with the start offset each
+  // one occupies in the concatenated `fullText` string built from them, so
+  // a match found in `fullText` (which can span more than one of these
+  // nodes, e.g. `<b>foo</b>bar`) can be mapped back to a DOM `Range`.
+  const collectFindableTextRuns = () => {
+    const root = document.body || document.documentElement;
+    if (!root) return { fullText: "", runs: [] };
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "INPUT"].includes(parent.tagName)) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        if (parent.isContentEditable) return NodeFilter.FILTER_REJECT;
+        if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
+        // Whitespace-only nodes are kept rather than skipped: dropping them
+        // would concatenate adjacent runs with no separator at all, joining
+        // e.g. `<span>foo</span> <strong>bar</strong>` into "foobar" and
+        // making it unmatchable by "foo bar" — the actual rendered text has
+        // a space there, carried by exactly this kind of node.
+        // `checkVisibility` (where available) accounts for the whole
+        // ancestor chain, unlike checking this node's immediate parent's
+        // own `display`/`visibility` alone.
+        if (typeof parent.checkVisibility === "function") {
+          if (!parent.checkVisibility({ checkVisibilityCSS: true })) {
+            return NodeFilter.FILTER_REJECT;
+          }
+        } else {
+          const style = window.getComputedStyle(parent);
+          if (style.display === "none" || style.visibility === "hidden") {
+            return NodeFilter.FILTER_REJECT;
+          }
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    const runs = [];
+    let fullText = "";
+    let node;
+    while ((node = walker.nextNode())) {
+      // A whitespace-only node (e.g. the indentation/newline between two
+      // sibling tags) renders as a single collapsed space under normal CSS
+      // white-space handling, however many raw whitespace characters it
+      // actually contains — contribute exactly one space to `fullText` for
+      // it, rather than the raw text, so "foo bar" can still match across
+      // e.g. `<span>foo</span>\n  <strong>bar</strong>`. `length` (not
+      // always `node.nodeValue.length`) is what `rangeFromTextOffsets`
+      // needs to find which run an offset falls into.
+      const isWhitespaceOnly = !node.nodeValue.trim();
+      const length = isWhitespaceOnly ? 1 : node.nodeValue.length;
+      runs.push({ node, start: fullText.length, length });
+      fullText += isWhitespaceOnly ? " " : node.nodeValue;
+    }
+    return { fullText, runs };
+  };
+
+  // `start`/`end` are offsets into `fullText` from `collectFindableTextRuns`;
+  // finds which run(s) they fall into and builds a `Range` spanning them,
+  // which `Range` supports natively even when start/end are different nodes.
+  // A collapsed whitespace-only run's single `fullText` position doesn't
+  // correspond 1:1 with an offset into its (possibly multi-character) raw
+  // node, but any offset within such a node is equally valid to anchor a
+  // `Range` there (it's whitespace throughout), so this just clamps into
+  // the node's actual bounds instead of trying to map precisely.
+  //
+  // A boundary value exactly shared between two adjacent runs (run A's
+  // `runEnd` equals run B's `start`) must resolve to a single run, not
+  // whichever happens to be visited first: as a match *start* it belongs to
+  // run B (so the match begins at the start of the next node, not the tail
+  // of the previous one — otherwise, e.g., a match starting right after a
+  // collapsed whitespace run would wrongly start inside that whitespace
+  // instead of the following word), and as a match *end* it belongs to run
+  // A (so trailing whitespace isn't pulled into the match). Hence the
+  // asymmetric `<`/`<=` comparisons below instead of a shared `<=`/`<=`.
+  const rangeFromTextOffsets = (runs, start, end) => {
+    const range = document.createRange();
+    let set = false;
+    for (let i = 0; i < runs.length; i += 1) {
+      const run = runs[i];
+      const runEnd = run.start + run.length;
+      const clampOffset = (offset) =>
+        Math.min(Math.max(offset - run.start, 0), run.node.nodeValue.length);
+      if (!set && start >= run.start && start < runEnd) {
+        range.setStart(run.node, clampOffset(start));
+        set = true;
+      }
+      if (end > run.start && end <= runEnd) {
+        range.setEnd(run.node, clampOffset(end));
+        return range;
+      }
+    }
+    return null;
+  };
+
+  const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  const highlightFindMatches = (query) => {
+    clearFindHighlights();
+    if (!query) return;
+    ensureFindStyle();
+    const { fullText, runs } = collectFindableTextRuns();
+    // A regex with the `i` flag does Unicode-aware case-insensitive
+    // comparison internally without transforming the string first, unlike
+    // `toLowerCase()` + `indexOf()` — some characters (e.g. Turkish "İ")
+    // change length under `toLowerCase()`, which would desync any offset
+    // computed against the lowercased copy from the original string.
+    const pattern = new RegExp(escapeRegExp(query), "gi");
+    let match;
+    while ((match = pattern.exec(fullText))) {
+      const range = rangeFromTextOffsets(runs, match.index, match.index + match[0].length);
+      if (range) findRanges.push(range);
+      if (match[0].length === 0) pattern.lastIndex += 1;
+    }
+    findLastQuery = query;
+  };
+
+  const setCurrentFindMatch = (index) => {
+    findCurrentIndex = index;
+    const current = findRanges[findCurrentIndex];
+    if (supportsHighlightApi) {
+      CSS.highlights.set(FIND_HIGHLIGHT_NAME, new Highlight(...findRanges));
+      CSS.highlights.set(
+        FIND_CURRENT_HIGHLIGHT_NAME,
+        new Highlight(...(current ? [current] : [])),
+      );
+    }
+    if (current) {
+      current.startContainer.parentElement?.scrollIntoView({
+        block: "center",
+        inline: "nearest",
+      });
+    }
+  };
+
+  window.__rabFind = (query, backwards) => {
+    if (query !== findLastQuery) {
+      highlightFindMatches(query);
+      setCurrentFindMatch(findRanges.length > 0 ? 0 : -1);
+    } else if (findRanges.length > 0) {
+      let next = findCurrentIndex + (backwards ? -1 : 1);
+      if (next >= findRanges.length) next = 0;
+      if (next < 0) next = findRanges.length - 1;
+      setCurrentFindMatch(next);
+    }
+    return findRanges.length > 0;
+  };
+
+  window.__rabFindClear = () => {
+    clearFindHighlights();
+  };
 })();
 "#;
 
