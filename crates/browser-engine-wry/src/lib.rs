@@ -324,6 +324,16 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
   // node, but any offset within such a node is equally valid to anchor a
   // `Range` there (it's whitespace throughout), so this just clamps into
   // the node's actual bounds instead of trying to map precisely.
+  //
+  // A boundary value exactly shared between two adjacent runs (run A's
+  // `runEnd` equals run B's `start`) must resolve to a single run, not
+  // whichever happens to be visited first: as a match *start* it belongs to
+  // run B (so the match begins at the start of the next node, not the tail
+  // of the previous one — otherwise, e.g., a match starting right after a
+  // collapsed whitespace run would wrongly start inside that whitespace
+  // instead of the following word), and as a match *end* it belongs to run
+  // A (so trailing whitespace isn't pulled into the match). Hence the
+  // asymmetric `<`/`<=` comparisons below instead of a shared `<=`/`<=`.
   const rangeFromTextOffsets = (runs, start, end) => {
     const range = document.createRange();
     let set = false;
@@ -331,12 +341,12 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
       const run = runs[i];
       const runEnd = run.start + run.length;
       const clampOffset = (offset) =>
-        Math.min(offset - run.start, run.node.nodeValue.length);
-      if (!set && start >= run.start && start <= runEnd) {
+        Math.min(Math.max(offset - run.start, 0), run.node.nodeValue.length);
+      if (!set && start >= run.start && start < runEnd) {
         range.setStart(run.node, clampOffset(start));
         set = true;
       }
-      if (end >= run.start && end <= runEnd) {
+      if (end > run.start && end <= runEnd) {
         range.setEnd(run.node, clampOffset(end));
         return range;
       }
