@@ -300,8 +300,18 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
     let fullText = "";
     let node;
     while ((node = walker.nextNode())) {
-      runs.push({ node, start: fullText.length });
-      fullText += node.nodeValue;
+      // A whitespace-only node (e.g. the indentation/newline between two
+      // sibling tags) renders as a single collapsed space under normal CSS
+      // white-space handling, however many raw whitespace characters it
+      // actually contains — contribute exactly one space to `fullText` for
+      // it, rather than the raw text, so "foo bar" can still match across
+      // e.g. `<span>foo</span>\n  <strong>bar</strong>`. `length` (not
+      // always `node.nodeValue.length`) is what `rangeFromTextOffsets`
+      // needs to find which run an offset falls into.
+      const isWhitespaceOnly = !node.nodeValue.trim();
+      const length = isWhitespaceOnly ? 1 : node.nodeValue.length;
+      runs.push({ node, start: fullText.length, length });
+      fullText += isWhitespaceOnly ? " " : node.nodeValue;
     }
     return { fullText, runs };
   };
@@ -309,18 +319,25 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
   // `start`/`end` are offsets into `fullText` from `collectFindableTextRuns`;
   // finds which run(s) they fall into and builds a `Range` spanning them,
   // which `Range` supports natively even when start/end are different nodes.
+  // A collapsed whitespace-only run's single `fullText` position doesn't
+  // correspond 1:1 with an offset into its (possibly multi-character) raw
+  // node, but any offset within such a node is equally valid to anchor a
+  // `Range` there (it's whitespace throughout), so this just clamps into
+  // the node's actual bounds instead of trying to map precisely.
   const rangeFromTextOffsets = (runs, start, end) => {
     const range = document.createRange();
     let set = false;
     for (let i = 0; i < runs.length; i += 1) {
       const run = runs[i];
-      const runEnd = run.start + run.node.nodeValue.length;
+      const runEnd = run.start + run.length;
+      const clampOffset = (offset) =>
+        Math.min(offset - run.start, run.node.nodeValue.length);
       if (!set && start >= run.start && start <= runEnd) {
-        range.setStart(run.node, start - run.start);
+        range.setStart(run.node, clampOffset(start));
         set = true;
       }
       if (end >= run.start && end <= runEnd) {
-        range.setEnd(run.node, end - run.start);
+        range.setEnd(run.node, clampOffset(end));
         return range;
       }
     }
