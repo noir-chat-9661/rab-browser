@@ -221,118 +221,160 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
   // observed to skip `user-select: none` text when finding via Selection,
   // which silently breaks search on pages that use it for UI chrome (menus,
   // buttons, ...) around real content (see rab-browser#128).
-  const FIND_MARK_CLASS = "__rab-find-mark";
-  const FIND_CURRENT_CLASS = "__rab-find-current";
-  let findMarks = [];
+  //
+  // Highlighting uses the CSS Custom Highlight API (`CSS.highlights`) rather
+  // than wrapping matches in `<mark>` elements: splicing `<mark>` into the
+  // DOM replaces the original Text nodes, which breaks any reference the
+  // page's own JS (or a framework's virtual DOM) holds to them, and can
+  // corrupt `contenteditable`/form internals. `CSS.highlights` paints over
+  // a `Range` without touching the DOM at all. Where it's unavailable (an
+  // older WebKitGTK on Linux), this falls back to reporting `found` and
+  // scrolling to the match with no visual highlight, rather than falling
+  // back to the destructive approach.
+  const FIND_HIGHLIGHT_NAME = "rab-find";
+  const FIND_CURRENT_HIGHLIGHT_NAME = "rab-find-current";
+  const supportsHighlightApi = typeof Highlight !== "undefined" && CSS.highlights;
+  let findRanges = [];
   let findCurrentIndex = -1;
   let findLastQuery = null;
 
   const ensureFindStyle = () => {
-    if (document.getElementById("__rab-find-style")) return;
+    if (!supportsHighlightApi || document.getElementById("__rab-find-style")) return;
     const style = document.createElement("style");
     style.id = "__rab-find-style";
     style.textContent = `
-      mark.${FIND_MARK_CLASS} { background: #ffe066; color: #1a1a1a; }
-      mark.${FIND_CURRENT_CLASS} { background: #ff9632; }
+      ::highlight(${FIND_HIGHLIGHT_NAME}) { background: #ffe066; color: #1a1a1a; }
+      ::highlight(${FIND_CURRENT_HIGHLIGHT_NAME}) { background: #ff9632; }
     `;
     (document.head || document.documentElement).appendChild(style);
   };
 
   const clearFindHighlights = () => {
-    for (const mark of findMarks) {
-      const parent = mark.parentNode;
-      if (!parent) continue;
-      parent.replaceChild(document.createTextNode(mark.textContent), mark);
-      parent.normalize();
+    if (supportsHighlightApi) {
+      CSS.highlights.delete(FIND_HIGHLIGHT_NAME);
+      CSS.highlights.delete(FIND_CURRENT_HIGHLIGHT_NAME);
     }
-    findMarks = [];
+    findRanges = [];
     findCurrentIndex = -1;
     findLastQuery = null;
   };
 
-  const collectFindableTextNodes = () => {
+  // Collects text nodes in document order along with the start offset each
+  // one occupies in the concatenated `fullText` string built from them, so
+  // a match found in `fullText` (which can span more than one of these
+  // nodes, e.g. `<b>foo</b>bar`) can be mapped back to a DOM `Range`.
+  const collectFindableTextRuns = () => {
     const root = document.body || document.documentElement;
-    if (!root) return [];
+    if (!root) return { fullText: "", runs: [] };
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
         const parent = node.parentElement;
         if (!parent) return NodeFilter.FILTER_REJECT;
-        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA"].includes(parent.tagName)) {
+        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "INPUT"].includes(parent.tagName)) {
           return NodeFilter.FILTER_REJECT;
         }
+        if (parent.isContentEditable) return NodeFilter.FILTER_REJECT;
         if (!node.nodeValue || !node.nodeValue.trim()) {
           return NodeFilter.FILTER_REJECT;
         }
-        const style = window.getComputedStyle(parent);
-        if (style.display === "none" || style.visibility === "hidden") {
-          return NodeFilter.FILTER_REJECT;
+        // `checkVisibility` (where available) accounts for the whole
+        // ancestor chain, unlike checking this node's immediate parent's
+        // own `display`/`visibility` alone.
+        if (typeof parent.checkVisibility === "function") {
+          if (!parent.checkVisibility({ checkVisibilityCSS: true })) {
+            return NodeFilter.FILTER_REJECT;
+          }
+        } else {
+          const style = window.getComputedStyle(parent);
+          if (style.display === "none" || style.visibility === "hidden") {
+            return NodeFilter.FILTER_REJECT;
+          }
         }
         return NodeFilter.FILTER_ACCEPT;
       },
     });
-    const nodes = [];
+    const runs = [];
+    let fullText = "";
     let node;
-    while ((node = walker.nextNode())) nodes.push(node);
-    return nodes;
+    while ((node = walker.nextNode())) {
+      runs.push({ node, start: fullText.length });
+      fullText += node.nodeValue;
+    }
+    return { fullText, runs };
   };
+
+  // `start`/`end` are offsets into `fullText` from `collectFindableTextRuns`;
+  // finds which run(s) they fall into and builds a `Range` spanning them,
+  // which `Range` supports natively even when start/end are different nodes.
+  const rangeFromTextOffsets = (runs, start, end) => {
+    const range = document.createRange();
+    let set = false;
+    for (let i = 0; i < runs.length; i += 1) {
+      const run = runs[i];
+      const runEnd = run.start + run.node.nodeValue.length;
+      if (!set && start >= run.start && start <= runEnd) {
+        range.setStart(run.node, start - run.start);
+        set = true;
+      }
+      if (end >= run.start && end <= runEnd) {
+        range.setEnd(run.node, end - run.start);
+        return range;
+      }
+    }
+    return null;
+  };
+
+  const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
   const highlightFindMatches = (query) => {
     clearFindHighlights();
     if (!query) return;
     ensureFindStyle();
-    const lowerQuery = query.toLowerCase();
-    for (const textNode of collectFindableTextNodes()) {
-      const text = textNode.nodeValue;
-      const lowerText = text.toLowerCase();
-      const fragments = [];
-      let cursor = 0;
-      let matchIndex = lowerText.indexOf(lowerQuery, cursor);
-      if (matchIndex === -1) continue;
-      while (matchIndex !== -1) {
-        if (matchIndex > cursor) {
-          fragments.push(document.createTextNode(text.slice(cursor, matchIndex)));
-        }
-        const mark = document.createElement("mark");
-        mark.className = FIND_MARK_CLASS;
-        mark.textContent = text.slice(matchIndex, matchIndex + query.length);
-        fragments.push(mark);
-        findMarks.push(mark);
-        cursor = matchIndex + query.length;
-        matchIndex = lowerText.indexOf(lowerQuery, cursor);
-      }
-      if (cursor < text.length) {
-        fragments.push(document.createTextNode(text.slice(cursor)));
-      }
-      const parent = textNode.parentNode;
-      if (!parent) continue;
-      for (const fragment of fragments) parent.insertBefore(fragment, textNode);
-      parent.removeChild(textNode);
+    const { fullText, runs } = collectFindableTextRuns();
+    // A regex with the `i` flag does Unicode-aware case-insensitive
+    // comparison internally without transforming the string first, unlike
+    // `toLowerCase()` + `indexOf()` — some characters (e.g. Turkish "İ")
+    // change length under `toLowerCase()`, which would desync any offset
+    // computed against the lowercased copy from the original string.
+    const pattern = new RegExp(escapeRegExp(query), "gi");
+    let match;
+    while ((match = pattern.exec(fullText))) {
+      const range = rangeFromTextOffsets(runs, match.index, match.index + match[0].length);
+      if (range) findRanges.push(range);
+      if (match[0].length === 0) pattern.lastIndex += 1;
     }
     findLastQuery = query;
   };
 
   const setCurrentFindMatch = (index) => {
-    const previous = findMarks[findCurrentIndex];
-    if (previous) previous.classList.remove(FIND_CURRENT_CLASS);
     findCurrentIndex = index;
-    const current = findMarks[findCurrentIndex];
+    const current = findRanges[findCurrentIndex];
+    if (supportsHighlightApi) {
+      CSS.highlights.set(FIND_HIGHLIGHT_NAME, new Highlight(...findRanges));
+      CSS.highlights.set(
+        FIND_CURRENT_HIGHLIGHT_NAME,
+        new Highlight(...(current ? [current] : [])),
+      );
+    }
     if (current) {
-      current.classList.add(FIND_CURRENT_CLASS);
-      current.scrollIntoView({ block: "center", inline: "nearest" });
+      current.startContainer.parentElement?.scrollIntoView({
+        block: "center",
+        inline: "nearest",
+      });
     }
   };
 
   window.__rabFind = (query, backwards) => {
     if (query !== findLastQuery) {
       highlightFindMatches(query);
-      setCurrentFindMatch(findMarks.length > 0 ? 0 : -1);
-    } else if (findMarks.length > 0) {
+      setCurrentFindMatch(findRanges.length > 0 ? 0 : -1);
+    } else if (findRanges.length > 0) {
       let next = findCurrentIndex + (backwards ? -1 : 1);
-      if (next >= findMarks.length) next = 0;
-      if (next < 0) next = findMarks.length - 1;
+      if (next >= findRanges.length) next = 0;
+      if (next < 0) next = findRanges.length - 1;
       setCurrentFindMatch(next);
     }
-    return findMarks.length > 0;
+    return findRanges.length > 0;
   };
 
   window.__rabFindClear = () => {
