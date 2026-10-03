@@ -12,3 +12,9 @@ members = [
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
+
+# tauri-apps/tao#1346 (closed unmerged): don't panic when a state-machine
+# message (poll/loop_destroyed) re-enters the handler during a nested pump
+# (rab-browser#145). Drop once an upstream release has an equivalent fix.
+[patch.crates-io]
+tao = { git = "https://github.com/kaanisthatyou/tao", rev = "e8c931c2ac3e509e94eb9f1eab7afcc4690f7a89" }
