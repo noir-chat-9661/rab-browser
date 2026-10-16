@@ -75,6 +75,16 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
       }
     }
 
+    // Ctrl+Tab never reaches tao while a content WebView (not the chrome
+    // overlay) has focus on Windows, so report it from here. Always Ctrl, even
+    // on macOS, where Cmd+Tab is the OS app switcher.
+    if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === "Tab") {
+      event.preventDefault();
+      event.stopPropagation();
+      postMessage({ type: "cycle_tab", backwards: event.shiftKey });
+      return;
+    }
+
     if (!hasPrimaryModifier(event)) return;
 
     const primaryOnly =
