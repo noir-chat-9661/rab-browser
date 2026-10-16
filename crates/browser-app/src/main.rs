@@ -1402,6 +1402,11 @@ fn add_tab(
         }
         Err(error) => {
             tabs.remove_tab(id);
+            // `remove_tab` falls back to the highest id, not the tab that
+            // was current before this one was added.
+            if let Some(previous) = previous {
+                tabs.select_tab(previous);
+            }
             Err(error)
         }
     }
@@ -2634,11 +2639,10 @@ fn main() -> wry::Result<()> {
                             )
                             .is_ok()
                             {
-                                // A background open must not steal focus
-                                // or open the location bar.
-                                if !background {
-                                    bring_chrome_to_front(&chrome);
-                                }
+                                // Focus-neutral, and needed for a background
+                                // tab too: its view was just added above the
+                                // chrome overlay in z-order.
+                                bring_chrome_to_front(&chrome);
                                 // Only prompt for a destination when this
                                 // tab was created without one (e.g. the MCP
                                 // new_tab tool with no url). The deferred
