@@ -119,16 +119,44 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
     postMessage({ type });
   }, true);
 
+  // composedPath() so a link inside a shadow root is found (event.target is
+  // retargeted to the host); `href` on an SVG <a> is an SVGAnimatedString.
+  const linkUnder = (event) => {
+    for (const node of event.composedPath()) {
+      const link = node instanceof Element ? node.closest("a[href]") : null;
+      if (link) return link;
+    }
+    return null;
+  };
+  const linkUrl = (link) => {
+    const href = link.href?.baseVal ?? link.href;
+    return href.startsWith("javascript:") ? null : new URL(href, document.baseURI).href;
+  };
+
   document.addEventListener("click", (event) => {
     if (!hasPrimaryModifier(event)) return;
 
-    const target =
-      event.target instanceof Element ? event.target : event.target?.parentElement;
-    const link = target?.closest("a[href]");
-    if (!link) return;
+    const link = linkUnder(event);
+    const url = link && linkUrl(link);
+    if (!url) return;
 
     event.preventDefault();
-    postMessage({ type: "new_tab", url: link.href });
+    postMessage({ type: "new_tab", url });
+  }, true);
+
+  // Middle-click opens the link in a background tab. The button arrives as
+  // `auxclick` (never `click`); the mousedown default is Windows' autoscroll.
+  document.addEventListener("mousedown", (event) => {
+    if (event.button === 1 && linkUnder(event)) event.preventDefault();
+  }, true);
+  document.addEventListener("auxclick", (event) => {
+    if (event.button !== 1) return;
+    const link = linkUnder(event);
+    const url = link && linkUrl(link);
+    if (!url) return;
+
+    event.preventDefault();
+    postMessage({ type: "new_tab", url, background: true });
   }, true);
 
   let lastUrl = location.href;
