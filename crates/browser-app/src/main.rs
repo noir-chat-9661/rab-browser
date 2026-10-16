@@ -3430,9 +3430,10 @@ fn main() -> wry::Result<()> {
                 // browser convention — always Ctrl, even on macOS, unlike
                 // primary_modifier_pressed's Cmd (Cmd+Tab is the OS app
                 // switcher and isn't ours to intercept). Mirrors base-ui's
-                // own Ctrl+Tab handler, needed here too since this native
-                // path is what actually receives the keydown when a content
-                // tab (not the chrome overlay) has focus.
+                // own Ctrl+Tab handler. This native path receives the keydown
+                // on macOS/Linux; on Windows a focused content WebView2
+                // swallows it, so the content script reports `cycle_tab`
+                // instead (see ChromeCommand::CycleTab).
                 WindowEvent::KeyboardInput { event, .. }
                     if event.state == ElementState::Pressed
                         && event.physical_key == KeyCode::Tab
