@@ -117,6 +117,10 @@ enum ChromeCommand {
         id: u64,
     },
     CloseCurrentTab,
+    /// Ctrl+Tab / Ctrl+Shift+Tab pressed while a content tab has focus.
+    CycleTab {
+        backwards: bool,
+    },
     Navigate {
         url: String,
     },
@@ -785,6 +789,18 @@ fn attach_app_menu_windows(menu: &Menu, hwnd: isize) {
         menu.init_for_hwnd(hwnd)
             .expect("failed to attach the Windows menu bar");
     }
+}
+
+/// The tab Ctrl+Tab (or Ctrl+Shift+Tab when `backwards`) moves to, wrapping
+/// around; `None` when there is nothing to switch to.
+fn adjacent_tab_id(tabs: &TabManager, backwards: bool) -> Option<TabId> {
+    let ids: Vec<TabId> = tabs.tabs().map(|tab| tab.id).collect();
+    let index = ids.iter().position(|&id| Some(id) == tabs.current_id())?;
+    if ids.len() < 2 {
+        return None;
+    }
+    let delta: isize = if backwards { -1 } else { 1 };
+    Some(ids[(index as isize + delta).rem_euclid(ids.len() as isize) as usize])
 }
 
 fn resolve_tab_id(tabs: &TabManager, raw_id: u64) -> Option<TabId> {
@@ -2682,6 +2698,26 @@ fn main() -> wry::Result<()> {
                                 }
                             }
                         }
+                        ChromeCommand::CycleTab { backwards } => {
+                            if let Some(next) = adjacent_tab_id(&tabs, backwards) {
+                                let previous = tabs.current_id();
+                                select_content_view(
+                                    &window,
+                                    &mut tabs,
+                                    &mut views,
+                                    &content_events_tx,
+                                    &commands_tx,
+                                    &current_theme,
+                                    sidebar_visible,
+                                    &mut last_active,
+                                    previous,
+                                    next,
+                                    &content_wake_proxy,
+                                    &mut web_context,
+                                );
+                                state_changed = true;
+                            }
+                        }
                         ChromeCommand::CloseCurrentTab => {
                             if new_tab_prompt_open {
                                 // No tab backs this prompt yet (see
@@ -3428,9 +3464,10 @@ fn main() -> wry::Result<()> {
                 // browser convention — always Ctrl, even on macOS, unlike
                 // primary_modifier_pressed's Cmd (Cmd+Tab is the OS app
                 // switcher and isn't ours to intercept). Mirrors base-ui's
-                // own Ctrl+Tab handler, needed here too since this native
-                // path is what actually receives the keydown when a content
-                // tab (not the chrome overlay) has focus.
+                // own Ctrl+Tab handler. This native path receives the keydown
+                // on macOS/Linux; on Windows a focused content WebView2
+                // swallows it, so the content script reports `cycle_tab`
+                // instead (see ChromeCommand::CycleTab).
                 WindowEvent::KeyboardInput { event, .. }
                     if event.state == ElementState::Pressed
                         && event.physical_key == KeyCode::Tab
@@ -3438,15 +3475,8 @@ fn main() -> wry::Result<()> {
                         && !modifiers.alt_key()
                         && !modifiers.super_key() =>
                 {
-                    let tab_ids: Vec<TabId> = tabs.tabs().map(|tab| tab.id).collect();
-                    if tab_ids.len() > 1
-                        && let Some(current) = tabs.current_id()
-                        && let Some(current_index) =
-                            tab_ids.iter().position(|&id| id == current)
-                    {
-                        let delta: isize = if modifiers.shift_key() { -1 } else { 1 };
-                        let next_index = (current_index as isize + delta)
-                            .rem_euclid(tab_ids.len() as isize) as usize;
+                    if let Some(next) = adjacent_tab_id(&tabs, modifiers.shift_key()) {
+                        let current = tabs.current_id();
                         select_content_view(
                             &window,
                             &mut tabs,
@@ -3456,8 +3486,8 @@ fn main() -> wry::Result<()> {
                             &current_theme,
                             sidebar_visible,
                             &mut last_active,
-                            Some(current),
-                            tab_ids[next_index],
+                            current,
+                            next,
                             &content_wake_proxy,
                             &mut web_context,
                         );
@@ -3510,10 +3540,10 @@ fn main() -> wry::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CHROME_HTML, NEW_TAB_URL, TabHistory, eval_result, internal_page_response, is_only_new_tab,
-        merge_codex_mcp_config, merge_mcp_client_config, merge_opencode_mcp_config,
-        merge_zed_mcp_config, normalize_url, parse_startup_args, register_mcp_clients,
-        restart_tab_suspend_grace, tab_suspend_deadline,
+        CHROME_HTML, NEW_TAB_URL, TabHistory, adjacent_tab_id, eval_result, internal_page_response,
+        is_only_new_tab, merge_codex_mcp_config, merge_mcp_client_config,
+        merge_opencode_mcp_config, merge_zed_mcp_config, normalize_url, parse_startup_args,
+        register_mcp_clients, restart_tab_suspend_grace, tab_suspend_deadline,
     };
     use browser_core::{DEFAULT_TAB_SUSPEND_GRACE_SECS, SearchEngine, TabManager, Theme};
     use std::{
@@ -4120,6 +4150,20 @@ args = ["--serve"]
 
         assert_eq!(last_active.get(&stale), Some(&now));
         assert_eq!(last_active.get(&untracked), Some(&now));
+    }
+
+    #[test]
+    fn adjacent_tab_wraps_in_both_directions() {
+        let mut tabs = TabManager::default();
+        assert_eq!(adjacent_tab_id(&tabs, false), None);
+        let a = tabs.add_tab("https://a.example");
+        assert_eq!(adjacent_tab_id(&tabs, false), None);
+        let b = tabs.add_tab("https://b.example");
+        let c = tabs.add_tab("https://c.example");
+        assert_eq!(adjacent_tab_id(&tabs, false), Some(a));
+        assert_eq!(adjacent_tab_id(&tabs, true), Some(b));
+        tabs.select_tab(a);
+        assert_eq!(adjacent_tab_id(&tabs, true), Some(c));
     }
 
     #[test]

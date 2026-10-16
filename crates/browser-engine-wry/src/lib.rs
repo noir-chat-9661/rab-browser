@@ -51,6 +51,17 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
   };
 
   document.addEventListener("keydown", (event) => {
+    // Ctrl+Tab never reaches tao while a content WebView (not the chrome
+    // overlay) has focus on Windows, so report it from here. Always Ctrl, even
+    // on macOS, where Cmd+Tab is the OS app switcher. Before the `repeat`
+    // check so that holding it keeps cycling (and never leaks Tab to the page).
+    if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === "Tab") {
+      event.preventDefault();
+      event.stopPropagation();
+      postMessage({ type: "cycle_tab", backwards: event.shiftKey });
+      return;
+    }
+
     if (event.repeat) return;
 
     const key = event.key.toLowerCase();
