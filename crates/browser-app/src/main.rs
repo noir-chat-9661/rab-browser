@@ -225,6 +225,13 @@ enum ContentEvent {
         id: TabId,
         playing: bool,
     },
+    /// A same-document URL change (`pushState`/`replaceState`/`popstate`)
+    /// reported by a content tab. It carries the tab's id because the tab
+    /// may not be the current one (e.g. one opened in the background).
+    UrlChanged {
+        id: TabId,
+        url: String,
+    },
 }
 
 #[derive(Serialize)]
@@ -845,6 +852,9 @@ fn create_content_view(
                     .is_ok(),
                 Ok(ChromeCommand::MediaPlaybackChanged { playing }) => ipc_events_tx
                     .send(ContentEvent::MediaPlaybackChanged { id, playing })
+                    .is_ok(),
+                Ok(ChromeCommand::ContentUrlChanged { url }) => ipc_events_tx
+                    .send(ContentEvent::UrlChanged { id, url })
                     .is_ok(),
                 Ok(ChromeCommand::ContentTitleChanged { title, url }) => ipc_events_tx
                     .send(ContentEvent::TitleChanged {
@@ -2535,6 +2545,23 @@ fn main() -> wry::Result<()> {
                         ContentEvent::MediaPlaybackChanged { id, playing } => {
                             playing_media.insert(id, playing);
                         }
+                        ContentEvent::UrlChanged { id, url } => {
+                            if let Some(tab) = tabs.tab_mut(id) {
+                                tab.url = url.clone();
+                                state_changed = true;
+                            }
+                            if !is_new_tab_url(&url) {
+                                let title = tabs
+                                    .tab(id)
+                                    .map(|tab| tab.title.clone())
+                                    .unwrap_or_default();
+                                history.record(url.clone(), title);
+                            }
+                            if let Some(history) = histories.get_mut(&id) {
+                                history.record_page_load(url);
+                            }
+                            update_history_flags(&mut tabs, &histories, id);
+                        }
                     }
                 }
                 if state_changed {
@@ -2718,25 +2745,6 @@ fn main() -> wry::Result<()> {
                                     }
                                     state_changed = true;
                                 }
-                            }
-                        }
-                        ChromeCommand::ContentUrlChanged { url } => {
-                            if let Some(id) = tabs.current_id() {
-                                if let Some(tab) = tabs.tab_mut(id) {
-                                    tab.url = url.clone();
-                                }
-                                if !is_new_tab_url(&url) {
-                                    let title = tabs
-                                        .tab(id)
-                                        .map(|tab| tab.title.clone())
-                                        .unwrap_or_default();
-                                    history.record(url.clone(), title);
-                                }
-                                if let Some(history) = histories.get_mut(&id) {
-                                    history.record_page_load(url);
-                                }
-                                update_history_flags(&mut tabs, &histories, id);
-                                state_changed = true;
                             }
                         }
                         ChromeCommand::OpenLocation => {
@@ -3086,7 +3094,8 @@ fn main() -> wry::Result<()> {
                         // IPC handler. Chrome itself never sends these commands.
                         ChromeCommand::FaviconChanged { .. }
                         | ChromeCommand::MediaPlaybackChanged { .. }
-                        | ChromeCommand::ContentTitleChanged { .. } => {}
+                        | ChromeCommand::ContentTitleChanged { .. }
+                        | ChromeCommand::ContentUrlChanged { .. } => {}
                         ChromeCommand::OpenDevtools => {
                             if let Some(view) = tabs.current_id().and_then(|id| views.get(&id)) {
                                 view.open_devtools();
