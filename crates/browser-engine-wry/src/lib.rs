@@ -120,6 +120,25 @@ const KEYBOARD_SHORTCUT_SCRIPT: &str = r#"
     postMessage({ type: "new_tab", url: link.href });
   }, true);
 
+  // Middle-click opens the link in a background tab. The button arrives as
+  // `auxclick` (never `click`); the mousedown default is Windows' autoscroll.
+  const linkUnder = (event) => {
+    const target =
+      event.target instanceof Element ? event.target : event.target?.parentElement;
+    return target?.closest("a[href]");
+  };
+  document.addEventListener("mousedown", (event) => {
+    if (event.button === 1 && linkUnder(event)) event.preventDefault();
+  }, true);
+  document.addEventListener("auxclick", (event) => {
+    if (event.button !== 1) return;
+    const link = linkUnder(event);
+    if (!link) return;
+
+    event.preventDefault();
+    postMessage({ type: "new_tab", url: link.href, background: true });
+  }, true);
+
   let lastUrl = location.href;
   const notifyUrlChanged = () => {
     if (location.href === lastUrl) return;

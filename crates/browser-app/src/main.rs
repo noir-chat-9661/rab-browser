@@ -109,6 +109,9 @@ enum ChromeCommand {
     },
     NewTab {
         url: Option<String>,
+        /// Open without switching away from the current tab (middle-click).
+        #[serde(default)]
+        background: bool,
     },
     CloseTab {
         id: u64,
@@ -1343,6 +1346,7 @@ fn add_tab(
     search_engine: SearchEngine,
     event_loop_proxy: &EventLoopProxy<McpRequest>,
     web_context: &mut WebContext,
+    background: bool,
 ) -> wry::Result<TabId> {
     let url = normalize_url(url, search_engine);
     let previous = tabs.current_id();
@@ -1360,6 +1364,15 @@ fn add_tab(
     ) {
         Ok(view) => {
             histories.insert(id, TabHistory::new(url));
+            // `tabs.add_tab` made the new tab current; a background open
+            // hands that back and keeps the (still loading) view hidden.
+            if let Some(previous) = previous.filter(|_| background) {
+                tabs.select_tab(previous);
+                let _ = view.set_visible(false);
+                last_active.insert(id, Instant::now());
+                views.insert(id, view);
+                return Ok(id);
+            }
             views.insert(id, view);
             select_content_view(
                 window,
@@ -1431,6 +1444,7 @@ fn close_tab(
             search_engine,
             event_loop_proxy,
             web_context,
+            false,
         )
         .is_ok()
         {
@@ -1912,6 +1926,7 @@ fn handle_mcp_request(
                 settings.search_engine,
                 event_loop_proxy,
                 web_context,
+                false,
             ) {
                 Ok(id) => {
                     bring_chrome_to_front(chrome);
@@ -2382,6 +2397,7 @@ fn main() -> wry::Result<()> {
         settings.search_engine,
         &content_wake_proxy,
         &mut web_context,
+        false,
     )?;
 
     let chrome_commands_tx = commands_tx.clone();
@@ -2571,7 +2587,7 @@ fn main() -> wry::Result<()> {
                                 state_changed = true;
                             }
                         }
-                        ChromeCommand::NewTab { url } => {
+                        ChromeCommand::NewTab { url, background } => {
                             let has_destination = url.is_some();
                             if add_tab(
                                 &window,
@@ -2587,10 +2603,15 @@ fn main() -> wry::Result<()> {
                                 settings.search_engine,
                                 &content_wake_proxy,
                                 &mut web_context,
+                                background,
                             )
                             .is_ok()
                             {
-                                bring_chrome_to_front(&chrome);
+                                // A background open must not steal focus
+                                // or open the location bar.
+                                if !background {
+                                    bring_chrome_to_front(&chrome);
+                                }
                                 // Only prompt for a destination when this
                                 // tab was created without one (e.g. the MCP
                                 // new_tab tool with no url). The deferred
@@ -2598,7 +2619,7 @@ fn main() -> wry::Result<()> {
                                 // same request, so reopening the location
                                 // bar here would immediately re-edit the
                                 // URL the user just submitted.
-                                if !has_destination {
+                                if !has_destination && !background {
                                     focus_location(&window, &chrome, &mut palette_open, &mut new_tab_prompt_open);
                                 }
                                 state_changed = true;
